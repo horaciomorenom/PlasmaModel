@@ -2,6 +2,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 import math
 from typing import Optional, List
+from matplotlib.animation import FuncAnimation
 from sortedcontainers import SortedDict
 
 class Particle:
@@ -489,7 +490,7 @@ class Plasma_Evolver:
         if zoom:
             times = (times[-1],)
             periods = 1
-            size = (8,6)
+            size = (5,4)
 
         fig, axs = plt.subplots(len(times), 1, figsize=size, dpi=120)
         
@@ -497,7 +498,8 @@ class Plasma_Evolver:
         # Convert axs to an iterable if it contains a single subplot
         axs = np.atleast_1d(axs)
 
-        fig.suptitle(r'Particle Phase Space ($N = {}$, $\delta = {}$)'.format(self.N, self.delta))
+        fig.suptitle(r'Particle Phase Space ($N = {}$, $\delta = {}$, $\Delta t = {}$, $\varepsilon = {}$)'.format(self.N, self.delta, self.dt, self.epsilon))
+
         #fig.text(0.5, 0.01, 'Position', ha='center')
         #fig.text(0.04, 0.5, 'Velocity', va='center', rotation='vertical')
         
@@ -514,33 +516,132 @@ class Plasma_Evolver:
             positions = np.array([(p.pos_hist[index] + p.period_hist[index]) for p in self.plasma.values()])
             
             velocities = np.array([p.vel_hist[index] for p in self.plasma.values()])
-            
+
+            positions = np.concatenate((np.array([positions[-1] - 1]), positions, np.array([positions[0] + 1])))
+            velocities = np.concatenate((np.array([velocities[-1]]), velocities, np.array([velocities[0]])))
+
 
             # Plot particles as points in phase space
             axs[num].set_xlim((0,periods))
             axs[num].set_ylim((-0.5,0.5))
+            if t == times[-1]: axs[num].set_xlabel("Position")
+            axs[num].set_ylabel("Velocity")
 
-            # Add lines connecting neighboring particles on the sorted dictionary
-            for j in range(-1, periods + 1):
-                axs[num].plot(positions + j, velocities, marker='.', markersize=4, alpha=0.8, linewidth=0.7)
+            if zoom: 
+                axs[num].hlines(y=0, xmin=0, xmax=periods, linewidth = 0.5, color = 'r', linestyle = '--')
+                axs[num].plot(positions, velocities, marker='.', markersize=4, alpha=0.8, linewidth=1)
                 axs[num].set_title("t = " + str(t))
-                if zoom: axs[num].hlines(y=0, xmin=0, xmax=periods, linewidth = 1, color = 'b', linestyle = '--')
-                """ for i, (k, p) in enumerate(self.plasma.items()):
-                    if i == 0:
-                        if j != 0:
-                            prev_p = list(self.plasma.values())[-1]
-                            print([prev_p.pos_hist[index] + j - 1, p.pos_hist[index] + j ])
-                            #axs[num].plot([prev_p.pos_hist[index] + j - 1, p.pos_hist[index] + j ], 
-                            #        [prev_p.vel_hist[index], p.vel_hist[index]], color=colors[j], alpha=0.3)
-                        continue
-                    prev_p = list(self.plasma.values())[i-1]
-                    axs[num].plot([prev_p.pos_hist[index] + j + prev_p.period_hist[index], 
-                                   p.pos_hist[index] + j + p.period_hist[index]], 
-                                [prev_p.vel_hist[index], p.vel_hist[index]], color=colors[j], alpha=0.3) """
-
-            if zoom:
                 axs[num].set_xlim((0.45, 0.55))
                 axs[num].set_ylim((-0.1, 0.1))
+                axs[num].set_yticks((-0.1, -0.05, 0, 0.05, 0.1 ))
+
+            else:
+
+                # Add lines connecting neighboring particles on the sorted dictionary
+                for j in range(-1, periods + 1):
+                    axs[num].plot(positions + j, velocities, marker='.', markersize=4, alpha=0.8, linewidth=0.7)
+                    axs[num].set_title("t = " + str(t))
+                    if zoom: axs[num].hlines(y=0, xmin=0, xmax=periods, linewidth = 1, color = 'b', linestyle = '--')
+                    """ for i, (k, p) in enumerate(self.plasma.items()):
+                        if i == 0:
+                            if j != 0:
+                                prev_p = list(self.plasma.values())[-1]
+                                print([prev_p.pos_hist[index] + j - 1, p.pos_hist[index] + j ])
+                                #axs[num].plot([prev_p.pos_hist[index] + j - 1, p.pos_hist[index] + j ], 
+                                #        [prev_p.vel_hist[index], p.vel_hist[index]], color=colors[j], alpha=0.3)
+                            continue
+                        prev_p = list(self.plasma.values())[i-1]
+                        axs[num].plot([prev_p.pos_hist[index] + j + prev_p.period_hist[index], 
+                                    p.pos_hist[index] + j + p.period_hist[index]], 
+                                    [prev_p.vel_hist[index], p.vel_hist[index]], color=colors[j], alpha=0.3) """                
                 
         fig.tight_layout()
         plt.show()
+
+    def makeMovie(self,tmax: float, fileName: str):
+
+        size = (8,4)
+
+        fps = 30
+
+        num_frames = tmax * fps
+
+        fig, ax = plt.subplots(1, 1, figsize=size, dpi=250)
+
+        ax.set_xlim((0,2))
+        ax.set_ylim((-0.5,0.5))
+        ax.set_xlabel("Position")
+        ax.set_ylabel("Velocity")
+        ax.set_title(r'$t = {}$'.format(0))
+
+        fig.suptitle(r'Particle Phase Space' + '\n' +  r'($N = {}$, $\delta = {}$, $\Delta t = {}$)'.format(self.N, self.delta, self.dt))
+
+        positions = np.array([(p.pos_hist[0] + p.period_hist[0]) for p in self.plasma.values()])
+            
+        velocities = np.array([p.vel_hist[0] for p in self.plasma.values()])
+
+        positions = np.concatenate((np.array([positions[-1] - 1]), positions, np.array([positions[0] + 1])))
+        velocities = np.concatenate((np.array([velocities[-1]]), velocities, np.array([velocities[0]])))
+
+        period0, = ax.plot(positions + -1, velocities, marker='.', markersize=4, alpha=0.8, linewidth=0.7, color='C0')
+        period1, = ax.plot(positions + 0, velocities, marker='.', markersize=4, alpha=0.8, linewidth=0.7, color='C1')
+        period2, = ax.plot(positions + 1, velocities, marker='.', markersize=4, alpha=0.8, linewidth=0.7, color='C2')
+        period3, = ax.plot(positions + 2, velocities, marker='.', markersize=4, alpha=0.8, linewidth=0.7, color='C3')
+
+        periods = [period0, period1, period2, period3]
+
+        fig.tight_layout()
+
+        def update(frame):
+
+            # Compute time in order to fit all data in one video of specified length
+            t = int(round(frame*tmax / num_frames, 2) / self.dt)
+
+            ax.set_xlim((0,2))
+            ax.set_ylim((-0.5,0.5))
+            ax.set_xlabel("Position")
+            ax.set_ylabel("Velocity")
+            ax.set_title(r'$t = {}$'.format(round(frame / fps, 1)))
+
+
+            positions = np.array([(p.pos_hist[t] + p.period_hist[t]) for p in self.plasma.values()])
+            
+            velocities = np.array([p.vel_hist[t] for p in self.plasma.values()])
+
+            positions = np.concatenate((np.array([positions[-1] - 1]), positions, np.array([positions[0] + 1])))
+            velocities = np.concatenate((np.array([velocities[-1]]), velocities, np.array([velocities[0]])))
+
+            period0.set_data(positions + -1, velocities)
+            period1.set_data(positions + 0, velocities)
+            period2.set_data(positions + 1, velocities)
+            period3.set_data(positions + 2, velocities)
+
+            for period in periods:
+
+                period.set_marker('.')
+                period.set_markersize(3)
+                period.set_alpha(0.8)
+                period.set_linewidth(0.7)
+            
+            periods[0].set_color('C0')
+            periods[1].set_color('C1')
+            periods[2].set_color('C2')
+            periods[3].set_color('C3')
+
+            fig.tight_layout()
+
+
+            
+            # Return a tuple of the scatterplots to be updated
+            return (*periods,)
+
+
+        
+        # Generate animation object
+        anim = FuncAnimation(fig, update, frames=int(num_frames), interval=int(1000/fps))
+
+        # Save animation object
+        anim.save(fileName, writer='ffmpeg',savefig_kwargs={"pad_inches":0})
+
+        
+
