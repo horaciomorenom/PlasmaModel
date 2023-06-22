@@ -29,21 +29,122 @@ class Particle:
     active: bool
     pos_hist: list
     vel_hist: list
-    periods : int
+    periods_traversed : int = 0
     period_hist: list 
 
-    def __init__(self, alpha_in: float, x0: float, v0: float, active: bool = True, periods_in: int = 0):              
+    def __init__(self, id_in: int, N: int, epsilon: float, types: bool = False, neighbors: tuple = None, ins_pos: str = None):
+        """
+        Initialize the particle with a given position and set all other attributes to zero.
+        
+        Parameters:
+        -----------
+        id_in : int
+            The ID of the particle.
+        N_in : int
+            The total number of particles.
+        epsilon : float
+            magnitude of perturbation to initial setup
+        types : bool 
+            flag determining if particles should be generated with passive/active distiction or
+            not, defaults to False. 
+        neighbors : tuple of Particles
+            optional argument that when present creates a particle "between" the neighbors
+        ins_pos : string
+            optional argument that should be included when neighbors is not None. 
+            indicates whether new particle should be inserted on the 'left' (between first 
+            and second particles in neighbors) or 'right' (between second and third particles in 
+            neighbors)
+        """
+        self.id = id_in
 
-        self.alpha = alpha_in
-        self.x = x0
-        self.v = v0
-        self.a = 0
-        self.active = active
-        self.pos_hist = []
-        self.vel_hist = []
+        if neighbors == None: # Brand new particle
+            if types:
+                self.active = True if self.id % 2 == 0 else False
+                self.alpha = (self.id - 1) / (N) # Create particles at midpoints and edges of intervals
+            else:
+                self.active = True
+                self.alpha = (self.id - 0.5) / N # Create particles only at midpoints
+            self.x = self.alpha + epsilon*np.sin(2* np.pi * self.alpha)
+            self.v = 0.0
+            self.a = 0.0
+            self.pos_hist = [self.x]
+            self.vel_hist = [self.v]
+            self.acc_hist = [0]
+            self.period_hist = [0]
 
-        self.periods = periods_in
-        self.period_his = []
+        # New particle to be inserted bewteen neighboors, according to ins_pos    
+        else:
+            p1, p2, p3 = neighbors
+            self.active = True # Inserted particles are always active
+
+            if p1.alpha < p3.alpha:
+
+                if ins_pos == 'left': 
+                    self.alpha = 0.5 * (p1.alpha + p2.alpha) 
+                elif ins_pos == 'right':
+                    self.alpha = 0.5 * (p2.alpha + p3.alpha) 
+
+            else: 
+                if ins_pos == 'left': 
+                    self.alpha = 0.5 * (p1.alpha + p2.alpha) 
+                elif ins_pos == 'right':
+                    self.alpha = (0.5 * (p2.alpha + p3.alpha + 1) ) % 1
+
+            x_interp, v_interp = get_interp_functions(p1, p2, p3)
+
+            self.x = x_interp(self.alpha)
+            self.v = v_interp(self.alpha)
+            #print("New alpha = {}, new x = {}, new v = {}".format(self.alpha, self.x, self.v))
+            self.a = 0
+
+            periods_p1 = p1.periods_traversed
+            periods_p2 = p1.periods_traversed
+
+            # Logic to figure out how many periods the new particle
+            # has travelled depending on its neighbors
+
+            # 1st case: both neighbors have travelled same amount of periods
+            if periods_p1 == periods_p2:
+
+                # New particle is placed in same period as both neighboors
+                self.periods_traversed = periods_p1
+
+            # 2nd case: right neighbor is 1 period ahead from left neighbor 
+            # new particle will either be close to 1 (same period as left neighbor)
+            #  or close to 0 (same period as right neighbor)
+            elif periods_p1 < periods_p2:
+
+                # case where new particle is closer to 1 than to 0
+                if 1 - self.x < self.x:
+
+                    #new particle was placed in same period as left neighbor
+                    self.periods_traversed = periods_p1
+
+                # case where new particle is closer to 0 than to 1    
+                else:
+
+                    #new particle placed in same period as 
+                    self.periods_traversed = periods_p2
+
+            # 3rd case: left neighbor is 1 period ahead from right neighbor 
+            # new particle will either be close to 1 (same period as right neighbor)
+            #  or close to 0 (same period as left neighbor)        
+            else: 
+                # case where new particle is closer to 1 than to 0
+                if 1 - self.x < self.x: 
+                    #new particle was placed in same period as p2
+                    self.periods_traversed = periods_p2
+                else:
+                    self.periods_traversed = periods_p1
+
+            # Initialize all pos and vel arrays to zeros up to present
+            self.pos_hist = [None] * (len(p1.pos_hist))
+            self.pos_hist.append(self.x)
+            self.vel_hist = [None] * (len(p1.vel_hist))
+            self.pos_hist.append(self.v)
+            self.acc_hist = [None] * (len(p1.acc_hist))
+            self.period_hist = [None] * (len(p1.period_hist))
+            self.period_hist.append(self.periods_traversed)
         
 
     def __lt__(self, other):
@@ -70,9 +171,9 @@ class Particle:
         Returns:
             None
         """
-        if self.alpha != 1:
+        if self.id != 1:
             self.x = new_x
-        if self.x >= 1: self.periods_traversed += 1
+        if self.x > 1: self.periods_traversed += 1
         if self.x < 0: self.periods_traversed -= 1
         self.x = self.x % 1
         self.pos_hist.append(self.x)
@@ -91,7 +192,7 @@ class Particle:
         Returns:
             None
         """
-        if self.alpha != 0:
+        if self.id != 1 or self.active:
             self.v = new_v
         self.vel_hist.append(self.v)
 
@@ -110,55 +211,47 @@ class Particle:
         self.acc_hist.append(self.a)
 
 def get_interp_functions(p1: Particle, p2: Particle, p3: Particle):
-    
-
-    pt1 = p1.periods_traversed
-    pt2 = p2.periods_traversed
-    pt3 = p3.periods_traversed
-
-    alphas = [p1.alpha, p2.alpha, p3.alpha]
-
-    if alphas[0] < alphas[1] and alphas[1] < alphas [2]:
-
-        if pt1 == pt2 and pt2 == pt3:
-            pos = [p1.x, p2.x, p3.x]
-
-        elif pt1 < pt2 and pt2 == pt3:
-            pos = [p1.x - 1, p2.x, p3.x]
         
-        elif pt1 == pt2 and pt2 < pt3:
-            pos = [p1.x, p2.x, p3.x + 1]
+        pt1 = p1.periods_traversed
+        pt2 = p2.periods_traversed
+        pt3 = p3.periods_traversed
+
+        alphas = [p1.alpha, p2.alpha, p3.alpha]
+
+        if alphas[0] < alphas[1] and alphas[1] < alphas [2]:
+
+            if pt1 == pt2 and pt2 == pt3:
+                pos = [p1.x, p2.x, p3.x]
+
+            elif pt1 < pt2 and pt2 == pt3:
+                pos = [p1.x - 1, p2.x, p3.x]
+            
+            elif pt1 == pt2 and pt2 < pt3:
+                pos = [p1.x, p2.x, p3.x + 1]
+
+            else: 
+                print(pt1, pt2, pt3)
 
         else: 
-            print(pt1, pt2, pt3)
+            alphas[2] += 1
 
-    else: 
-        alphas[2] += 1
+            if pt1 == pt2 and pt2 == pt3:
+                pos = [p1.x, p2.x, p3.x + 1]
 
-        if pt1 == pt2 and pt2 == pt3:
-            pos = [p1.x, p2.x, p3.x + 1]
+            elif pt1 < pt2 and pt2 == pt3:
+                pos = [p1.x - 1, p2.x, p3.x + 1]
+            
+            elif pt1 == pt2 and pt2 < pt3:
+                pos = [p1.x, p2.x, p3.x + 2]
 
-        elif pt1 < pt2 and pt2 == pt3:
-            pos = [p1.x - 1, p2.x, p3.x + 1]
-        
-        elif pt1 == pt2 and pt2 < pt3:
-            pos = [p1.x, p2.x, p3.x + 2]
+        vel = [p1.v, p2.v, p3.v]
+        x_interp = interpolate.interp1d(alphas, pos, kind='quadratic')
+        v_func = interpolate.interp1d(alphas, vel, kind='quadratic')
 
-    vel = [p1.v, p2.v, p3.v]
-    x_interp = interpolate.interp1d(alphas, pos, kind='quadratic')
-    v_func = interpolate.interp1d(alphas, vel, kind='quadratic')
+        def x_func(alpha):
+            return x_interp(alpha) % 1
 
-    def x_func(alpha):
-        return x_interp(alpha) % 1
-
-    return x_func, v_func
-
-class Plamsa_Initializer:
-
-    def __init__(self):
-        pass
-
-    
+        return x_func, v_func
 
 class Plasma_Evolver:
 
