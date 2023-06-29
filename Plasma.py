@@ -231,6 +231,7 @@ class Plasma_Evolver:
         self.Ek_hist = []
         self.sym_hist = []
         self.ins_hist = []
+        self.sym_profiles = []
         self.epsilon = epsilon_in
         self.current_t = 0
 
@@ -239,10 +240,12 @@ class Plasma_Evolver:
         self.plasma = init_cold_pert(self.N, self.epsilon, not insertion)
         
         for p in self.plasma.values():
-            self.weights[p.alpha] = self.get_w(p)
+            if not p.active: 
+                self.weights[p.alpha] = self.get_w(p)
 
-        self.Ep_hist.append(self.calc_Ep())
-        self.Ek_hist.append(self.calc_Ek())
+        if not self.insertion:
+            self.Ep_hist.append(self.calc_Ep())
+            self.Ek_hist.append(self.calc_Ek())
         self.sym_hist.append(self.check_symmetry())
         self.ins_hist.append(0)
 
@@ -379,6 +382,10 @@ class Plasma_Evolver:
         pos_sym = pos_left + pos_right
         vel_sym = vel_left + vel_right
 
+        profile = pos_sym + vel_sym
+
+        self.sym_profiles.append(profile)
+
         total = (np.sum(np.abs(pos_sym)) + np.sum(np.abs(vel_sym))) / self.N
 
         """ if total > 0.5: 
@@ -475,6 +482,7 @@ class Plasma_Evolver:
             # Get ref particle positions and fix w/ periods to ensure all 
             # particles are on the same interval
             x_vals = np.array([p1.x, p2.x, p3.x])
+            
 
             if wrap: x_vals[2] += 1
 
@@ -504,12 +512,12 @@ class Plasma_Evolver:
                     # if new coordinate for right particle falls outside of [0,1)
                     # then set to period ahead. Otherwise p3 period
                     r_period = p2.periods if (x_right < 0 or x_right >=1) else p3.periods
-                    print("a")
+                    #print("a")
                 else:
                     # Only p1 is a period ahead
                     l_period = p1.periods if (x_left < 0 or x_left >=1) else p2.periods
                     r_period = p2.periods
-                    print("b")
+                    #print("b")
             
             else:
                 if periods[1] == 1:
@@ -522,29 +530,29 @@ class Plasma_Evolver:
                         #print(x_vals)
                         #print(x_left)
                         #print(x_right)
-                        print("c")
+                        #print("c")
                         #print("l = {}, r = {}".format(l_period, r_period))
                     else:
                         # Only p3 is a period ahead 
                         l_period = p1.periods
                         r_period = p2.periods if (x_right < 0 or x_right >=1) else p3.periods
-                        print("d")
+                        #print("d")
                 else:
                     if periods[2] == 1:
                         l_period = p1.periods
                         r_period = p3.periods if (x_right < 0 or x_right >=1) else p2.periods
-                        print("e")
+                        #print("e")
                     else:
                         # All particles on the same period
                         l_period = r_period = p1.periods 
-                        print("f")     
+                        #print("f")     
 
             x_left = x_left % 1
             x_right = x_right % 1 
 
-            print("Left coordnates: ({}, {})".format(x_left, v_left))
-            print("Right coordinates: ({}, {})".format(x_right, v_right))
-            
+            #print("Left coordnates: alpha = {}, (x,v) = ({}, {})".format(round(a_left,2), x_left, v_left))
+            #print("Right coordinates: alpha = {}, (x,v) = ({}, {})".format(round(a_right,2), x_right, v_right))
+
 
             p_left = Particle(a_left, x_left, v_left, periods_in=l_period, num_iter=len(p1.pos_hist))
             p_right = Particle(a_right, x_right, v_right, periods_in=r_period, num_iter=len(p1.pos_hist))
@@ -556,24 +564,25 @@ class Plasma_Evolver:
 
             self.N += 2
 
-        for p in self.plasma.values():
-            self.weights[p.alpha] = self.get_w(p)
-            
-        
-        return None
+        self.weights.clear()
 
+        for p in self.plasma.values():
+   
+            if not p.active: self.weights[p.alpha] = self.get_w(p)
+
+        return None
 
 
 
  
     def get_w(self, p: Particle) -> float:
 
-        p_prev, wrap = self.get_prev(p, same_type=self.insertion)
+        p_next, wrap = self.get_next(p, same_type=self.insertion)
 
         if not wrap:
-            return p.alpha - p_prev.alpha
+            return p_next.alpha - p.alpha
         else:
-            return 1 - (p_prev.alpha - p.alpha) 
+            return p_next.alpha - p.alpha + 1
         
     def get_pos_array(self, active_only = False):
 
@@ -677,7 +686,7 @@ class Plasma_Evolver:
             float: acceleration
         """
 
-        weights = self.get_active_weights()  
+        weights = self.weights.values()
 
 
         # Broadcast positions to get a 2D array of values of Green's Function kd
@@ -755,10 +764,14 @@ class Plasma_Evolver:
             else: new_x, new_v = self.euler_update(lambda x,v: v, self.calc_acceleration_reg, x_arr, v_arr)
 
             self.update_particles(new_x, new_v)
-            self.Ep_hist.append(self.calc_Ep())
-            self.Ek_hist.append(self.calc_Ek())
+            
+            if not self.insertion:
+                self.Ep_hist.append(self.calc_Ep())
+                self.Ek_hist.append(self.calc_Ek())
 
             if self.insertion: self.insert_particles()
+
+            assert(np.all(np.array([p.active for p in self.plasma.values()])[1::2] == 1))
             
                 
     def plot_particles(self,times: tuple = (-1,), periods: int = 1, zoom: bool = False, markers_on = True):
@@ -825,13 +838,13 @@ class Plasma_Evolver:
 
             if zoom: 
                 axs[num].hlines(y=0, xmin=0, xmax=periods, linewidth = 0.5, color = 'r', linestyle = '--')
-                for j in range(-1, periods + 1):
+                for j in range(-3, periods + 3):
                     if markers_on:
                         axs[num].plot(positions + j, velocities, marker='.', markersize=4,  alpha=0.8, linewidth=0.7)
                     else:
                         axs[num].plot(positions + j, velocities, alpha=0.8, linewidth=0.7)
                 axs[num].set_title("t = " + str(t))
-                axs[num].set_xlim((0.85, 1.15))
+                axs[num].set_xlim((0.5, 1.5))
                 axs[num].set_ylim((-0.4, 0.4))
                 #axs[num].set_yticks((-0.1, -0.05, 0, 0.05, 0.1 ))
 
@@ -886,12 +899,15 @@ class Plasma_Evolver:
         positions = np.concatenate((positions, np.array([positions[0] + 1])))
         velocities = np.concatenate((velocities, np.array([velocities[0]])))
 
+        period_1, = ax.plot(positions + -2, velocities, marker=None, alpha=0.8, linewidth=0.7, color='C4')
         period0, = ax.plot(positions + -1, velocities, marker=None, alpha=0.8, linewidth=0.7, color='C0')
         period1, = ax.plot(positions + 0, velocities, marker=None, alpha=0.8, linewidth=0.7, color='C1')
         period2, = ax.plot(positions + 1, velocities, marker=None, alpha=0.8, linewidth=0.7, color='C2')
         period3, = ax.plot(positions + 2, velocities, marker=None, alpha=0.8, linewidth=0.7, color='C3')
+        period4, = ax.plot(positions + 3, velocities, marker=None, alpha=0.8, linewidth=0.7, color='C5')
 
-        periods = [period0, period1, period2, period3]
+
+        periods = [period0, period1, period2, period3, period_1, period4]
 
         fig.tight_layout()
 
@@ -901,7 +917,7 @@ class Plasma_Evolver:
             t = int(round(frame*tmax / num_frames, 2) / self.dt)
 
             ax.set_xlim((0,2))
-            ax.set_ylim((-0.6,0.6))
+            ax.set_ylim((-0.5,0.5))
             ax.set_xlabel("Position")
             ax.set_ylabel("Velocity")
             ax.set_title(r'$t = {}$'.format(round(frame / fps, 1)))
@@ -914,10 +930,12 @@ class Plasma_Evolver:
             positions = np.concatenate((positions, np.array([positions[0] + 1])))
             velocities = np.concatenate((velocities, np.array([velocities[0]])))
 
+            period_1.set_data(positions + -2, velocities)
             period0.set_data(positions + -1, velocities)
             period1.set_data(positions + 0, velocities)
             period2.set_data(positions + 1, velocities)
             period3.set_data(positions + 2, velocities)
+            period4.set_data(positions + 3, velocities)
 
             for period in periods:
 
@@ -930,6 +948,8 @@ class Plasma_Evolver:
             periods[1].set_color('C1')
             periods[2].set_color('C2')
             periods[3].set_color('C3')
+            periods[4].set_color('C4')
+            periods[5].set_color('C5')
 
             fig.tight_layout()
 
