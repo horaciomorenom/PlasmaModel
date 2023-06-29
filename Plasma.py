@@ -33,16 +33,16 @@ class Particle:
 
     def __init__(self, alpha_in: float, x0: float, v0: float, 
                  active: bool = True, periods_in: int = 0, num_iter: int = None):              
-        """Initialize a particle in plasma
+        """Initialzie a particle in plasma
 
         Args:
-            alpha_in (float): Lagrangian coordinate of the particle 
-            x0 (float): initial position of the particle
-            v0 (float): initial velocity of the particle
-            active (bool, optional): determines whether a particle should be 
-                active (True) or passive (False). Defaults to True.
-            periods_in (int, optional): number of periods that the particle has
-                traversed. Defaults to 0.
+            alpha_in (float): Lagrangian coordinate of the particle
+            x0 (float): Initial position
+            v0 (float): Initial velocity
+            active (bool, optional): Boolean that determines whether a particle is active
+            . Defaults to True.
+            periods_in (int, optional): Number of periods travelled by particle. Defaults to 0.
+            num_iter (int, optional): Number of iterations that the particle has existed for. Defaults to None.
         """
         self.alpha = alpha_in
         self.x = x0
@@ -128,54 +128,18 @@ class Particle:
         self.a = acceleration(self)
         self.acc_hist.append(self.a)
 
-def get_interp_functions(p1: Particle, p2: Particle, p3: Particle):
-    
-
-    pt1 = p1.periods_traversed
-    pt2 = p2.periods_traversed
-    pt3 = p3.periods_traversed
-
-    alphas = [p1.alpha, p2.alpha, p3.alpha]
-
-    if alphas[0] < alphas[1] and alphas[1] < alphas [2]:
-
-        if pt1 == pt2 and pt2 == pt3:
-            pos = [p1.x, p2.x, p3.x]
-
-        elif pt1 < pt2 and pt2 == pt3:
-            pos = [p1.x - 1, p2.x, p3.x]
-        
-        elif pt1 == pt2 and pt2 < pt3:
-            pos = [p1.x, p2.x, p3.x + 1]
-
-        else: 
-            print(pt1, pt2, pt3)
-
-    else: 
-        alphas[2] += 1
-
-        if pt1 == pt2 and pt2 == pt3:
-            pos = [p1.x, p2.x, p3.x + 1]
-
-        elif pt1 < pt2 and pt2 == pt3:
-            pos = [p1.x - 1, p2.x, p3.x + 1]
-        
-        elif pt1 == pt2 and pt2 < pt3:
-            pos = [p1.x, p2.x, p3.x + 2]
-
-    vel = [p1.v, p2.v, p3.v]
-    x_interp = interpolate.interp1d(alphas, pos, kind='quadratic')
-    v_func = interpolate.interp1d(alphas, vel, kind='quadratic')
-
-    def x_func(alpha):
-        return x_interp(alpha) % 1
-
-    return x_func, v_func
-
-
 def init_cold_pert(N: int, epsilon: float, 
                    active_only: bool = True) -> SortedDict:
+    """Initialize a cold plasma with perturbation
 
+    Args:
+        N (int): Number of particles in the plasma
+        epsilon (float): Magniture of perturbations
+        active_only (bool, optional): Determines wether all particles are active or not. Defaults to True.
+
+    Returns:
+        SortedDict: Sorted dictionary with particle objects as items and lagrangian coordinates as keys
+    """
     initial_plasma = SortedDict()
 
     for i in range(1, N+1):
@@ -196,7 +160,6 @@ def init_cold_pert(N: int, epsilon: float,
 
 class Plasma_Evolver:
 
-
     N: int
     dt: float
     epsilon: float
@@ -209,16 +172,18 @@ class Plasma_Evolver:
     
     def __init__(self, N_in: int, dt_in: float, epsilon_in: float = 0.05, 
                  delta_in: float = 0.002, insertion: bool = False, 
-                 d1: float = None, rk: bool = False):
-        """
-        Initializes Plasma_Evolver class, setting parameters and initializing the plasma in
-        a Sorted Dict
+                 d1: float = None, d2: float = None, rk: bool = False):
+        """Initializes an instance of PlasmaEvolver class with specified parameters
 
         Args:
-        - N_in (int): The number of particles to generate.
-        - dt_in (float): Simulation timestep
-        - epsilon (float): Magnitude of the perturbation. Defaults to 0.05.
-
+            N_in (int): Number of starting particles in the plasma
+            dt_in (float): Timestep parameter for integration
+            epsilon_in (float, optional): Initial spatial perturbation parameter. Defaults to 0.05.
+            delta_in (float, optional): E-field regularization parameter. Defaults to 0.002.
+            insertion (bool, optional): True if adaptive particle insetion is used. Defaults to False.
+            d1 (float, optional): Distance threshold parameter for particle insertion. Defaults to None.
+            d2 (float, optional): Curvature threshold parameter for particle insertion. Defaults to None.
+            rk (bool, optional): True for RK4 integration to be used, False for Euler's method. Defaults to False.
         """
         self.N = N_in
         self.dt = dt_in
@@ -402,21 +367,12 @@ class Plasma_Evolver:
             #print(pos_sym)
     
     def insert_particles(self):
-
-
-        # PSEUDOCODE FOR THIS FUNCITON 
-        # 1. Iterate through all PASSIVE particles and check if
-        #    we need to add a new particle depending on the distance
-        #    to the next passive particle
-        # 2. If particles need to be inserted, create two new particles
-        # 3. Set middle (active) particle to passive
-        # 4. Insert two new active particles to plasma
-        # 5. Update quadrature weights
-        # 6. Update total number of particles
-
+        
+        # Get position and velocity arrays
         init_pos = self.get_pos_array()
         init_vel = self.get_vel_array()
 
+        # Add periodic image of point at x=0
         pos = np.empty(len(init_pos) + 1, dtype=init_pos.dtype)
         pos[:len(init_pos)] = init_pos
         pos[len(init_pos)] = init_pos[0] + 1
@@ -425,41 +381,38 @@ class Plasma_Evolver:
         vel[:len(init_vel)] = init_vel
         vel[len(init_vel)] = init_vel[0]
 
-        # Get distances between every other pair of particles
+        # Get spatial distances between every other pair of particles
         first_pos_diff = np.abs(np.diff(pos[::2]))
+        # Consider alternate difference for points that have crossed periodic boundary
         alt_pos_diff = 1 - first_pos_diff
 
         # Make sure we get smallest distance between 2 points (account
         # for periodic boundaries)
         pos_diff = np.minimum(first_pos_diff, alt_pos_diff,)
 
+        # Calculate velocity distances between passive particles
         vel_diff = np.diff(vel[::2])
 
+        # Calculate phase space distance between passive particles
         total_diff = np.linalg.norm(np.array([pos_diff, vel_diff]).T, axis=1)
 
-        #print(total_diff)
-
-        # Get coordinates for the ones that need insertion
+        # Calculate indices for particles that exceed threshold d1
         indices = np.transpose(np.argwhere(total_diff > self.d1))
         indices = 2 * indices
 
+        # Track number of particles inserted this iteration
         self.ins_hist.append(np.size(indices))
 
+        # Stop if no particles need to be inserted
         if np.size(indices) == 0:
             return
 
+        # Save lagrangian coordinates for intervas that need insertion
         keys = np.array(self.plasma.keys())[indices[0]]    
-        #print("\n Entering particle insertion, t = {}".format(round(self.current_t, 2)))
 
-        #print("Keys = ")
-        #print(keys)
-
-        """ if np.size(indices) == 1:
-            print("Only one index, total_diff = ")
-            print(total_diff) """
-
+        # Begin insertion for each interval
         for key in keys:
-            # Get next 2 particles
+            # Get 3 particles in interval for insertion
             p1 = self.plasma[key]
             assert(not p1.active)
             p2, _ = self.get_next(p1, same_type=False)
@@ -483,9 +436,10 @@ class Plasma_Evolver:
             # particles are on the same interval
             x_vals = np.array([p1.x, p2.x, p3.x])
             
-
+            # Ensure all particle positions are increasing
             if wrap: x_vals[2] += 1
 
+            # Normalize all x_values to make sure they are continuous according to periods travelled
             x_vals = x_vals + periods
             # Get ref particle velocities
             v_vals = np.array([p1.v, p2.v, p3.v])
@@ -494,15 +448,15 @@ class Plasma_Evolver:
             x_func = interpolate.interp1d(alphas, x_vals, kind='quadratic')
             v_func = interpolate.interp1d(alphas, v_vals, kind='quadratic')
 
-            #eprint("alphas: {}".format(np.array2string(alphas)))
-            #print("x_vals = {}".format(np.array2string(x_vals)))
-
+            # Calculate new coordinates for inserted particles
             x_left = x_func(a_left)
             x_right = x_func(a_right)
 
             v_left = v_func(a_left)
             v_right = v_func(a_right)
 
+            # Logic to determine # of periods travelled for inserted particles
+            # to ensure proper visualization when plotting
             if periods[0] == 1:
 
                 if periods[1] == 1:
@@ -527,55 +481,51 @@ class Plasma_Evolver:
                         # so right particle will also be on that period 
                         l_period = p2.periods if (x_left < 0 or x_left >=1) else p1.periods
                         r_period = p2.periods
-                        #print(x_vals)
-                        #print(x_left)
-                        #print(x_right)
-                        #print("c")
-                        #print("l = {}, r = {}".format(l_period, r_period))
                     else:
                         # Only p3 is a period ahead 
                         l_period = p1.periods
                         r_period = p2.periods if (x_right < 0 or x_right >=1) else p3.periods
-                        #print("d")
                 else:
                     if periods[2] == 1:
                         l_period = p1.periods
                         r_period = p3.periods if (x_right < 0 or x_right >=1) else p2.periods
-                        #print("e")
                     else:
                         # All particles on the same period
                         l_period = r_period = p1.periods 
-                        #print("f")     
 
+            # Make sure new particle positions fall in interval [0,1)
             x_left = x_left % 1
             x_right = x_right % 1 
 
-            #print("Left coordnates: alpha = {}, (x,v) = ({}, {})".format(round(a_left,2), x_left, v_left))
-            #print("Right coordinates: alpha = {}, (x,v) = ({}, {})".format(round(a_right,2), x_right, v_right))
-
-
+            # Create new particle objects with specified values
             p_left = Particle(a_left, x_left, v_left, periods_in=l_period, num_iter=len(p1.pos_hist))
             p_right = Particle(a_right, x_right, v_right, periods_in=r_period, num_iter=len(p1.pos_hist))
 
+            # Set middle particle to passive
             self.plasma[alphas[1]].active = False
 
+            # Add particles to plasma dictionary
             self.plasma[a_left] = p_left
             self.plasma[a_right] = p_right
 
+            # Increase particle count
             self.N += 2
 
+        # Recalculate quadrature weigths
         self.weights.clear()
 
         for p in self.plasma.values():
-   
             if not p.active: self.weights[p.alpha] = self.get_w(p)
-
-        return None
-
-
-
  
     def get_w(self, p: Particle) -> float:
+        """Get quadrature weight of a given particle
+
+        Args:
+            p (Particle): reference particle
+
+        Returns:
+            float: quadrature weight value
+        """
 
         p_next, wrap = self.get_next(p, same_type=self.insertion)
 
@@ -584,15 +534,22 @@ class Plasma_Evolver:
         else:
             return p_next.alpha - p.alpha + 1
         
-    def get_pos_array(self, active_only = False):
+    def get_pos_array(self, active_only = False) -> np.array:
+        """Extract all particle positions from plasma dictionary
 
+        Args:
+            active_only (bool, optional): True if only active particle positions should be extracted. False for all other particles. Defaults to False.
+
+        Returns:
+            [np.array]: Array of particle positions in ascending order with respect to lagrangian coordinates
+        """
         if active_only:
             return np.array([p.x for p in self.plasma.values() if p.active],
                             dtype=float)
 
         return np.array([p.x for p in self.plasma.values()],dtype=float)
     
-    def get_vel_array(self):
+    def get_vel_array(self)-> np.array:
 
         return np.array([p.v for p in self.plasma.values()],dtype=float)
     
