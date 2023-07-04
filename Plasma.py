@@ -205,7 +205,10 @@ class Plasma_Evolver:
         self.plasma = init_cold_pert(self.N, self.epsilon, not insertion)
         
         for p in self.plasma.values():
-            if not p.active: 
+            if self.insertion:
+                if not p.active: 
+                    self.weights[p.alpha] = self.get_w(p)
+            else:
                 self.weights[p.alpha] = self.get_w(p)
 
         if not self.insertion:
@@ -571,7 +574,7 @@ class Plasma_Evolver:
 
         # Get positions
         pos = self.get_pos_array()
-        w = weights = np.array(self.weights.values(), dtype=float)
+        w = self.weights.values()
         # Calculate absoolute value of differences between all positions
         abs_diff_matrix = - self.gd(pos[:, np.newaxis], pos[np.newaxis, :])
         square_diff_matrix = 0.5 * np.power(pos[:, np.newaxis] 
@@ -597,7 +600,7 @@ class Plasma_Evolver:
         c = np.sqrt(1 + 4*self.delta**2)
 
         if self.delta == 0:
-            return c*0.5 * np.sign(diff) - diff
+            return 0.5 * np.sign(diff) - diff
 
         return np.where(diff == 0, 0, 0.5 * c * diff / 
                         np.sqrt(diff**2 + self.delta**2) - diff)
@@ -762,7 +765,7 @@ class Plasma_Evolver:
         # Convert axs to an iterable if it contains a single subplot
         axs = np.atleast_1d(axs)
 
-        fig.suptitle(r'Particle Phase Space ($N = {}$, $\delta = {}$, $\Delta t = {}$, $\varepsilon = {}$)'.format(self.N, self.delta, self.dt, self.epsilon))
+        fig.suptitle(r'Particle Phase Space ($N = {}$, $\delta = {}$, $\Delta t = {}$, $\varepsilon = {}$, $d_1 = {}$)'.format(self.N, self.delta, self.dt, self.epsilon, self.d1))
 
         #fig.text(0.5, 0.01, 'Position', ha='center')
         #fig.text(0.04, 0.5, 'Velocity', va='center', rotation='vertical')
@@ -808,7 +811,7 @@ class Plasma_Evolver:
             else:
 
                 # Add lines connecting neighboring particles on the sorted dictionary
-                for j in range(-2, periods + 2):
+                for j in range(-3, periods + 3):
                     if markers_on:
                         axs[num].plot(positions + j, velocities, marker='.', markersize=4,  alpha=0.8, linewidth=0.7)
                     else:
