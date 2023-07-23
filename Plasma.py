@@ -185,6 +185,7 @@ class Plasma_Evolver:
             d2 (float, optional): Curvature threshold parameter for particle insertion. Defaults to None.
             rk (bool, optional): True for RK4 integration to be used, False for Euler's method. Defaults to False.
         """
+        self.N0 = N_in
         self.N = N_in
         self.dt = dt_in
         self.epsilon = epsilon_in
@@ -734,7 +735,8 @@ class Plasma_Evolver:
             assert(np.all(np.array([p.active for p in self.plasma.values()])[1::2] == 1))
             
                 
-    def plot_particles(self,times: tuple = (-1,), periods: int = 1, zoom: bool = False, markers_on = True):
+    def plot_particles(self,times: tuple = (-1,), periods: int = 1, zoom: bool = False, markers_on = True, 
+                       lines_off = False, bigplot = False, midzoom: bool = False):
         """
         Plots particles stored in a sorted dictionary in phase space as points where
         the x-coordinate is position and the y-coordinate is velocity, and lines that 
@@ -751,21 +753,38 @@ class Plasma_Evolver:
 
         colors = [cmap(i) for i in range(periods)]
 
-        size = (5*periods,3.5*len(times))
+        size = (5*periods,3.5*len(times)) if bigplot else (4*periods,2*len(times))
+
+        if periods == 1 and len(times) == 1:
+            size = (5,3)
 
 
-        if zoom:
+        if zoom or midzoom:
             times = (times[-1],)
-            #periods = 1
-            size = (8,8)
+            periods = 1 if zoom else periods
+            size = (8,6) if zoom else (8,8)
 
-        fig, axs = plt.subplots(len(times), 1, figsize=size, dpi=120)
+        fig, axs = plt.subplots(len(times), 1, figsize=size, dpi=150)
         
 
         # Convert axs to an iterable if it contains a single subplot
         axs = np.atleast_1d(axs)
 
-        fig.suptitle(r'Particle Phase Space ($N = {}$, $\delta = {}$, $\Delta t = {}$, $\varepsilon = {}$, $d_1 = {}$)'.format(self.N, self.delta, self.dt, self.epsilon, self.d1))
+        param_title = r'$N = {}$, $\delta = {}$, $\Delta t = {}$, $\varepsilon = {}$'.format(self.N, self.delta, self.dt, self.epsilon)
+
+        if self.insertion: 
+            param_title = r'$N_0 = {}$, '.format(self.N0) + param_title
+            param_title += r', $d_1 = {}$'.format(self.d1)
+
+        param_title = '(' + param_title + ')'
+
+        title = 'Particle Phase Space ' + param_title if len(times) < 3 else 'Particle Phase Space' + '\n' + param_title
+        
+
+        if periods == 1 and len(times) == 1 and not zoom:
+            fig.suptitle(title, fontsize=10)
+        else: 
+            fig.suptitle(title, fontsize=12)
 
         #fig.text(0.5, 0.01, 'Position', ha='center')
         #fig.text(0.04, 0.5, 'Velocity', va='center', rotation='vertical')
@@ -792,30 +811,37 @@ class Plasma_Evolver:
 
             # Plot particles as points in phase space
             axs[num].set_xlim((0,periods))
-            axs[num].set_ylim((-0.6,0.6))
+            axs[num].set_ylim((-0.5,0.5))
             if t == times[-1]: axs[num].set_xlabel("Position")
             axs[num].set_ylabel("Velocity")
 
-            if zoom: 
-                axs[num].hlines(y=0, xmin=0, xmax=periods, linewidth = 0.5, color = 'r', linestyle = '--')
-                for j in range(-3, periods + 3):
+            if zoom or midzoom: 
+                if zoom: axs[num].hlines(y=0, xmin=0, xmax=periods, linewidth = 0.5, color = 'r', linestyle = '--')
+                visperiods = range(-3, periods + 3) if midzoom else range(-1, periods + 1)
+                for j in visperiods:
                     if markers_on:
-                        axs[num].plot(positions + j, velocities, marker='.', markersize=4,  alpha=0.8, linewidth=0.7)
+                        axs[num].plot(positions + j, velocities, marker='.', markersize=3,  alpha=1, linewidth=0.7)
                     else:
-                        axs[num].plot(positions + j, velocities, alpha=0.8, linewidth=0.7)
+                        axs[num].plot(positions + j, velocities, alpha=1, linewidth=0.7)
                 axs[num].set_title("t = " + str(t))
-                axs[num].set_xlim((0.5, 1.5))
-                axs[num].set_ylim((-0.4, 0.4))
+                if zoom:
+                    axs[num].set_xlim((0.45, 0.55))
+                    axs[num].set_ylim((-0.1, 0.1))
+                if midzoom:
+                    axs[num].set_xlim((0.5, 1.5))
+                    axs[num].set_ylim((-0.4, 0.4))
                 #axs[num].set_yticks((-0.1, -0.05, 0, 0.05, 0.1 ))
 
             else:
 
                 # Add lines connecting neighboring particles on the sorted dictionary
-                for j in range(-3, periods + 3):
-                    if markers_on:
-                        axs[num].plot(positions + j, velocities, marker='.', markersize=4,  alpha=0.8, linewidth=0.7)
+                for j in range(-1, periods + 1):
+                    if markers_on and not lines_off:
+                        axs[num].plot(positions + j, velocities, marker='.', markersize=2.5,  alpha=1, linewidth=0.7)
+                    elif lines_off: 
+                        axs[num].scatter(positions + j, velocities, marker='.', s=1,  alpha=1)
                     else:
-                        axs[num].plot(positions + j, velocities, alpha=0.8, linewidth=0.7)
+                        axs[num].plot(positions + j, velocities, alpha=1, linewidth=0.7)
                     axs[num].set_title("t = " + str(t))
                     if zoom: axs[num].hlines(y=0, xmin=0, xmax=periods, linewidth = 1, color = 'b', linestyle = '--')
                     """ for i, (k, p) in enumerate(self.plasma.items()):
@@ -850,7 +876,18 @@ class Plasma_Evolver:
         ax.set_ylabel("Velocity")
         ax.set_title(r'$t = {}$'.format(0))
 
-        fig.suptitle(r'Particle Phase Space' + '\n' +  r'($N = {}$, $\delta = {}$, $\Delta t = {}$)'.format(self.N, self.delta, self.dt))
+        param_title = r'$N = {}$, $\delta = {}$, $\Delta t = {}$, $\varepsilon = {}$'.format(self.N, self.delta, self.dt, self.epsilon)
+
+        if self.insertion: 
+            param_title = r'$N_0 = {}$, '.format(self.N0) + param_title
+            param_title += r', $d_1 = {}$'.format(self.d1)
+
+        param_title = '(' + param_title + ')'
+
+        title =  'Particle Phase Space ' + param_title
+        
+
+        fig.suptitle(title)
 
         positions = np.array([(p.pos_hist[0] + p.period_hist[0]) for p in self.plasma.values() if p.pos_hist[0] is not None])
             
@@ -859,6 +896,7 @@ class Plasma_Evolver:
         positions = np.concatenate((positions, np.array([positions[0] + 1])))
         velocities = np.concatenate((velocities, np.array([velocities[0]])))
 
+        period_2, = ax.plot(positions + -3, velocities, marker=None, alpha=0.8, linewidth=0.7, color='C6')
         period_1, = ax.plot(positions + -2, velocities, marker=None, alpha=0.8, linewidth=0.7, color='C4')
         period0, = ax.plot(positions + -1, velocities, marker=None, alpha=0.8, linewidth=0.7, color='C0')
         period1, = ax.plot(positions + 0, velocities, marker=None, alpha=0.8, linewidth=0.7, color='C1')
@@ -867,7 +905,7 @@ class Plasma_Evolver:
         period4, = ax.plot(positions + 3, velocities, marker=None, alpha=0.8, linewidth=0.7, color='C5')
 
 
-        periods = [period0, period1, period2, period3, period_1, period4]
+        periods = [period0, period1, period2, period3, period_1, period4, period_2]
 
         fig.tight_layout()
 
@@ -876,42 +914,46 @@ class Plasma_Evolver:
             # Compute time in order to fit all data in one video of specified length
             t = int(round(frame*tmax / num_frames, 2) / self.dt)
 
-            ax.set_xlim((0,2))
-            ax.set_ylim((-0.5,0.5))
-            ax.set_xlabel("Position")
-            ax.set_ylabel("Velocity")
-            ax.set_title(r'$t = {}$'.format(round(frame / fps, 1)))
+            if t * self.dt <= tmax:
+
+                ax.set_xlim((0,2))
+                ax.set_ylim((-0.5,0.5))
+                ax.set_xlabel("Position")
+                ax.set_ylabel("Velocity")
+                ax.set_title(r'$t = {}$'.format(round(frame / fps, 1)))
 
 
-            positions = np.array([(p.pos_hist[t] + p.period_hist[t]) for p in self.plasma.values() if p.pos_hist[t] is not None])
-            
-            velocities = np.array([p.vel_hist[t] for p in self.plasma.values() if p.vel_hist[t] is not None])
+                positions = np.array([(p.pos_hist[t] + p.period_hist[t]) for p in self.plasma.values() if p.pos_hist[t] is not None])
+                
+                velocities = np.array([p.vel_hist[t] for p in self.plasma.values() if p.vel_hist[t] is not None])
 
-            positions = np.concatenate((positions, np.array([positions[0] + 1])))
-            velocities = np.concatenate((velocities, np.array([velocities[0]])))
+                positions = np.concatenate((positions, np.array([positions[0] + 1])))
+                velocities = np.concatenate((velocities, np.array([velocities[0]])))
 
-            period_1.set_data(positions + -2, velocities)
-            period0.set_data(positions + -1, velocities)
-            period1.set_data(positions + 0, velocities)
-            period2.set_data(positions + 1, velocities)
-            period3.set_data(positions + 2, velocities)
-            period4.set_data(positions + 3, velocities)
+                period_1.set_data(positions + -2, velocities)
+                period_2.set_data(positions + -3, velocities)
+                period0.set_data(positions + -1, velocities)
+                period1.set_data(positions + 0, velocities)
+                period2.set_data(positions + 1, velocities)
+                period3.set_data(positions + 2, velocities)
+                period4.set_data(positions + 3, velocities)
 
-            for period in periods:
+                for period in periods:
 
-                period.set_marker(None)
-                #period.set_markersize(0)
-                period.set_alpha(0.8)
-                period.set_linewidth(0.7)
-            
-            periods[0].set_color('C0')
-            periods[1].set_color('C1')
-            periods[2].set_color('C2')
-            periods[3].set_color('C3')
-            periods[4].set_color('C4')
-            periods[5].set_color('C5')
+                    period.set_marker(None)
+                    #period.set_markersize(0)
+                    period.set_alpha(0.8)
+                    period.set_linewidth(0.7)
+                
+                periods[0].set_color('C0')
+                periods[1].set_color('C1')
+                periods[2].set_color('C2')
+                periods[3].set_color('C3')
+                periods[4].set_color('C4')
+                periods[5].set_color('C5')
+                periods[6].set_color('C6')
 
-            fig.tight_layout()
+                fig.tight_layout()
 
             
             # Return a tuple of the scatterplots to be updated
@@ -920,7 +962,7 @@ class Plasma_Evolver:
 
         
         # Generate animation object
-        anim = FuncAnimation(fig, update, frames=int(num_frames), interval=int(1000/fps))
+        anim = FuncAnimation(fig, update, frames=int(num_frames) + fps * 5, interval=int(1000/fps))
 
         # Save animation object
         anim.save(fileName, writer='ffmpeg',savefig_kwargs={"pad_inches":0})
