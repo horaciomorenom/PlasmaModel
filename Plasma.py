@@ -129,7 +129,7 @@ class Particle:
         self.acc_hist.append(self.a)
 
 def init_cold_pert(N: int, epsilon: float, 
-                   active_only: bool = True) -> SortedDict:
+                   active_only: bool = True, v = 0) -> SortedDict:
     """Initialize a cold plasma with perturbation
 
     Args:
@@ -145,7 +145,7 @@ def init_cold_pert(N: int, epsilon: float,
     for i in range(1, N+1):
         alpha = (i - 0.5) / N if active_only else (i - 1) / N
         x0 = alpha + epsilon * np.sin(2 * np.pi * alpha)
-        v0 = 0
+        v0 = v
 
         if not active_only:
             is_active = i % 2 == 0
@@ -172,7 +172,8 @@ class Plasma_Evolver:
     
     def __init__(self, N_in: int, dt_in: float, epsilon_in: float = 0.05, 
                  delta_in: float = 0.002, insertion: bool = False, 
-                 d1: float = None, d2: float = None, rk: bool = False):
+                 d1: float = None, d2: float = None, rk: bool = False,
+                 N_streams: int = 1, v0 = 0):
         """Initializes an instance of PlasmaEvolver class with specified parameters
 
         Args:
@@ -190,7 +191,7 @@ class Plasma_Evolver:
         self.dt = dt_in
         self.epsilon = epsilon_in
         self.delta = delta_in
-        self.weights = SortedDict()
+        self.weights = []
         self.insertion = insertion
         self.rk = rk
         self.Ep_hist = []
@@ -203,50 +204,35 @@ class Plasma_Evolver:
 
         self.d1 = 2/self.N if d1 is None else d1
 
-        self.plasma = init_cold_pert(self.N, self.epsilon, not insertion)
-        
-        for p in self.plasma.values():
-            if self.insertion:
-                if not p.active: 
-                    self.weights[p.alpha] = self.get_w(p)
-            else:
-                self.weights[p.alpha] = self.get_w(p)
+        self.plasma = []
 
-        if not self.insertion:
+        if N_streams == 2:
+            self.plasma.append(init_cold_pert(self.N, self.epsilon, not insertion, v=v0))
+            self.plasma.append(init_cold_pert(self.N, self.epsilon, not insertion, v=-v0))
+        else:
+            self.plasma.append(init_cold_pert(self.N, self.epsilon, not insertion))
+        
+        for stream in self.plasma:
+            w = SortedDict()
+            for p in stream.values():
+                if self.insertion:
+                    if not p.active: 
+                        w[p.alpha] = self.get_w(p, stream)
+                else:
+                    w[p.alpha] = self.get_w(p, stream)
+
+            self.weights.append(w)
+
+        # TODO :fix energy
+
+        """ if not self.insertion:
             self.Ep_hist.append(self.calc_Ep())
-            self.Ek_hist.append(self.calc_Ek())
-        self.sym_hist.append(self.check_symmetry())
+            self.Ek_hist.append(self.calc_Ek()) """
+        #self.sym_hist.append(self.check_symmetry())
         self.ins_hist.append(0)
 
-    def get_prev(self, p: Particle, same_type: bool = True) -> tuple:
-        """Returns the previous particle in the self.plasma array. If same_type 
-        is true, then it returns the first previous particle of the same type 
-        (active/pasive). Assumes N is even 
-
-        Args:
-            p (Particle): reference particle
-            same_type (bool, optional): same_type flag. Defaults to True.
-
-        Returns:
-            Particle: previous particle matching type if same_type is True
-            wrap_around: flag to determine if next particle is on the other side
-                of interval
-        """
-
-        if self.insertion: assert(self.N % 2 == 0)
-
-        index = self.plasma.bisect_left(p.alpha)
-
-        if same_type:
-            prev_index = index - 2
-        else:
-            prev_index = index -1
-
-        wrap_around = True if prev_index < 0 else False
-
-        return list(self.plasma.values())[prev_index], wrap_around
     
-    def get_next(self, p: Particle, same_type: bool = True) -> tuple:
+    def get_next(self, p: Particle, stream: SortedDict, same_type: bool = True) -> tuple:
         """Returns the next particle in the self.plasma array. If same_type 
         is true, then it returns the first next particle of the same type 
         (active/pasive). 
@@ -263,18 +249,18 @@ class Plasma_Evolver:
 
         if self.insertion: assert(self.N % 2 == 0)
 
-        index = self.plasma.bisect_left(p.alpha)
+        index = stream.bisect_left(p.alpha)
 
         if same_type:
             prev_index = index + 2
         else:
             prev_index = index + 1
 
-        wrap_around = True if (prev_index >= len(self.plasma.values())) else False
+        wrap_around = True if (prev_index >= len(stream.values())) else False
             
-        prev_index = prev_index % len(self.plasma.values())
+        prev_index = prev_index % len(stream.values())
 
-        return list(self.plasma.values())[prev_index], wrap_around
+        return list(stream.values())[prev_index], wrap_around
 
     def calc_next_dist(self, p: Particle) -> float:
 
@@ -521,7 +507,7 @@ class Plasma_Evolver:
         for p in self.plasma.values():
             if not p.active: self.weights[p.alpha] = self.get_w(p)
  
-    def get_w(self, p: Particle) -> float:
+    def get_w(self, p: Particle, stream: SortedDict()) -> float:
         """Get quadrature weight of a given particle
 
         Args:
@@ -531,7 +517,7 @@ class Plasma_Evolver:
             float: quadrature weight value
         """
 
-        p_next, wrap = self.get_next(p, same_type=self.insertion)
+        p_next, wrap = self.get_next(p, stream, same_type=self.insertion)
 
         if not wrap:
             return p_next.alpha - p.alpha
@@ -547,25 +533,36 @@ class Plasma_Evolver:
         Returns:
             [np.array]: Array of particle positions in ascending order with respect to lagrangian coordinates
         """
-        if active_only:
-            return np.array([p.x for p in self.plasma.values() if p.active],
-                            dtype=float)
+        pos_array = []
+        for stream in self.plasma:
+            if active_only:
+                pos_array.append(np.array([p.x for p in stream.values() if p.active],
+                                dtype=float))
 
-        return np.array([p.x for p in self.plasma.values()],dtype=float)
+            else:
+                pos_array.append(np.array([p.x for p in stream.values() if p.active],
+                                dtype=float))
+        return np.array(pos_array)
     
     def get_vel_array(self)-> np.array:
 
-        return np.array([p.v for p in self.plasma.values()],dtype=float)
-    
-    def update_particles(self, new_x: np.array, new_v: np.array) -> None:
+        vel_array = []
 
-        for i, p in enumerate(self.plasma.values()):
-            p.update_position(new_x[i])
-            p.update_velocity(new_v[i])
+        for stream in self.plasma:
+
+            vel_array.append(np.array([p.v for p in stream.values()],dtype=float))
+
+        return np.array(vel_array)
+
+    def update_particles(self, new_x: np.array, new_v: np.array) -> None:
+        for s, stream in enumerate(self.plasma):
+            for i, p in enumerate(stream.values()):
+                p.update_position(new_x[s,i])
+                p.update_velocity(new_v[s,i])
 
     def calc_Ek(self):
 
-        vel = self.get_vel_array()
+        vel = self.get_vel_array().flatten()
         w = np.array(self.weights.values(), dtype=float)
         Ek = 0.5 * np.sum(np.power(vel, 2))
         return Ek
@@ -647,8 +644,7 @@ class Plasma_Evolver:
             float: acceleration
         """
 
-        weights = self.weights.values()
-
+        weights = np.array([np.array(w.values()) for w in self.weights]).flatten()
 
         # Broadcast positions to get a 2D array of values of Green's Function kd
         # over all particles. i,j entry corresponds to the values of kd(xi, xj) 
@@ -678,15 +674,25 @@ class Plasma_Evolver:
     
     def euler_update(self, fx: callable, fv: callable , x0: np.array, v0: np.array) -> tuple:
 
+        shape = x0.shape
+
+        x0 = x0.flatten()
+        v0 = v0.flatten()
+
         dx = fx(x0, v0)
         dv = fv(x0, v0)
 
         new_x = x0 + dx * self.dt
         new_v = v0 + dv * self.dt
 
-        return new_x, new_v
+        return new_x.reshape(shape), new_v.reshape(shape)
     
     def rk4_update(self, fx: callable, fv: callable , x0: np.array, v0: np.array) -> tuple:
+
+        shape = x0.shape
+
+        x0 = x0.flatten()
+        v0 = v0.flatten()
 
         k1x = fx(x0, v0)
         k1v = fv(x0, v0)
@@ -700,7 +706,7 @@ class Plasma_Evolver:
         new_x = x0 + (1/6) * self.dt * (k1x + 2 * k2x + 2 * k3x + k4x)
         new_v = v0 + (1/6) * self.dt * (k1v + 2 * k2v + 2 * k3v + k4v)
 
-        return new_x, new_v
+        return new_x.reshape(shape), new_v.reshape(shape)
     
     def evolve_plasma(self, time: float):
         """
@@ -716,7 +722,7 @@ class Plasma_Evolver:
 
             self.current_t += self.dt
             
-            self.sym_hist.append(self.check_symmetry())
+            #self.sym_hist.append(self.check_symmetry())
 
             x_arr = self.get_pos_array()
             v_arr = self.get_vel_array()
@@ -726,13 +732,14 @@ class Plasma_Evolver:
 
             self.update_particles(new_x, new_v)
             
-            if not self.insertion:
+            """ if not self.insertion:
                 self.Ep_hist.append(self.calc_Ep())
-                self.Ek_hist.append(self.calc_Ek())
+                self.Ek_hist.append(self.calc_Ek()) """
 
             if self.insertion: self.insert_particles()
 
-            assert(np.all(np.array([p.active for p in self.plasma.values()])[1::2] == 1))
+            for stream in self.plasma:
+                assert(np.all(np.array([p.active for p in stream.values()])[1::2] == 1))
             
                 
     def plot_particles(self,times: tuple = (-1,), periods: int = 1, zoom: bool = False, markers_on = True, 
@@ -798,64 +805,54 @@ class Plasma_Evolver:
             
             index = int(t / self.dt)
             
-            # Extract positions and velocities of particles
-            positions = np.array([(p.pos_hist[index] + p.period_hist[index]) for p in self.plasma.values() if p.pos_hist[index] is not None])
-            
-            velocities = np.array([p.vel_hist[index] for p in self.plasma.values() if p.vel_hist[index] is not None])
+            for stream in self.plasma:
 
-            #positions = np.concatenate((np.array([positions[-1] - 1]), positions, np.array([positions[0] + 1])))
-            #velocities = np.concatenate((np.array([velocities[-1]]), velocities, np.array([velocities[0]])))
-            positions = np.concatenate((positions, np.array([positions[0] + 1])))
-            velocities = np.concatenate((velocities, np.array([velocities[0]])))
+                # Extract positions and velocities of particles
+                positions = np.array([(p.pos_hist[index] + p.period_hist[index]) for p in stream.values() if p.pos_hist[index] is not None])
+                
+                velocities = np.array([p.vel_hist[index] for p in stream.values() if p.vel_hist[index] is not None])
+
+                #positions = np.concatenate((np.array([positions[-1] - 1]), positions, np.array([positions[0] + 1])))
+                #velocities = np.concatenate((np.array([velocities[-1]]), velocities, np.array([velocities[0]])))
+                positions = np.concatenate((positions, np.array([positions[0] + 1])))
+                velocities = np.concatenate((velocities, np.array([velocities[0]])))
 
 
-            # Plot particles as points in phase space
-            axs[num].set_xlim((0,periods))
-            axs[num].set_ylim((-0.5,0.5))
-            if t == times[-1]: axs[num].set_xlabel("Position")
-            axs[num].set_ylabel("Velocity")
+                # Plot particles as points in phase space
+                axs[num].set_xlim((0,periods))
+                axs[num].set_ylim((-0.7,0.7))
+                if t == times[-1]: axs[num].set_xlabel("Position")
+                axs[num].set_ylabel("Velocity")
 
-            if zoom or midzoom: 
-                if zoom: axs[num].hlines(y=0, xmin=0, xmax=periods, linewidth = 0.5, color = 'r', linestyle = '--')
-                visperiods = range(-3, periods + 3) if midzoom else range(-1, periods + 1)
-                for j in visperiods:
-                    if markers_on:
-                        axs[num].plot(positions + j, velocities, marker='.', markersize=3,  alpha=1, linewidth=0.7)
-                    else:
-                        axs[num].plot(positions + j, velocities, alpha=1, linewidth=0.7)
-                axs[num].set_title("t = " + str(t))
-                if zoom:
-                    axs[num].set_xlim((0.45, 0.55))
-                    axs[num].set_ylim((-0.1, 0.1))
-                if midzoom:
-                    axs[num].set_xlim((0.5, 1.5))
-                    axs[num].set_ylim((-0.4, 0.4))
-                #axs[num].set_yticks((-0.1, -0.05, 0, 0.05, 0.1 ))
-
-            else:
-
-                # Add lines connecting neighboring particles on the sorted dictionary
-                for j in range(-1, periods + 1):
-                    if markers_on and not lines_off:
-                        axs[num].plot(positions + j, velocities, marker='.', markersize=2.5,  alpha=1, linewidth=0.7)
-                    elif lines_off: 
-                        axs[num].scatter(positions + j, velocities, marker='.', s=1,  alpha=1)
-                    else:
-                        axs[num].plot(positions + j, velocities, alpha=1, linewidth=0.7)
+                if zoom or midzoom: 
+                    if zoom: axs[num].hlines(y=0, xmin=0, xmax=periods, linewidth = 0.5, color = 'r', linestyle = '--')
+                    visperiods = range(-3, periods + 3) if midzoom else range(-1, periods + 1)
+                    for j in visperiods:
+                        if markers_on:
+                            axs[num].plot(positions + j, velocities, marker='.', markersize=3,  alpha=1, linewidth=0.7)
+                        else:
+                            axs[num].plot(positions + j, velocities, alpha=1, linewidth=0.7)
                     axs[num].set_title("t = " + str(t))
-                    if zoom: axs[num].hlines(y=0, xmin=0, xmax=periods, linewidth = 1, color = 'b', linestyle = '--')
-                    """ for i, (k, p) in enumerate(self.plasma.items()):
-                        if i == 0:
-                            if j != 0:
-                                prev_p = list(self.plasma.values())[-1]
-                                print([prev_p.pos_hist[index] + j - 1, p.pos_hist[index] + j ])
-                                #axs[num].plot([prev_p.pos_hist[index] + j - 1, p.pos_hist[index] + j ], 
-                                #        [prev_p.vel_hist[index], p.vel_hist[index]], color=colors[j], alpha=0.3)
-                            continue
-                        prev_p = list(self.plasma.values())[i-1]
-                        axs[num].plot([prev_p.pos_hist[index] + j + prev_p.period_hist[index], 
-                                    p.pos_hist[index] + j + p.period_hist[index]], 
-                                    [prev_p.vel_hist[index], p.vel_hist[index]], color=colors[j], alpha=0.3) """                
+                    if zoom:
+                        axs[num].set_xlim((0.45, 0.55))
+                        axs[num].set_ylim((-0.1, 0.1))
+                    if midzoom:
+                        axs[num].set_xlim((0.5, 1.5))
+                        axs[num].set_ylim((-0.4, 0.4))
+                    #axs[num].set_yticks((-0.1, -0.05, 0, 0.05, 0.1 ))
+
+                else:
+
+                    # Add lines connecting neighboring particles on the sorted dictionary
+                    for j in range(-3, periods + 3):
+                        if markers_on and not lines_off:
+                            axs[num].plot(positions + j, velocities, marker='.', markersize=2.5,  alpha=1, linewidth=0.7)
+                        elif lines_off: 
+                            axs[num].scatter(positions + j, velocities, marker='.', s=1,  alpha=1)
+                        else:
+                            axs[num].plot(positions + j, velocities, alpha=1, linewidth=0.7)
+                        axs[num].set_title("t = " + str(t))
+                        if zoom: axs[num].hlines(y=0, xmin=0, xmax=periods, linewidth = 1, color = 'b', linestyle = '--')          
                 
         fig.tight_layout()
         plt.show()
