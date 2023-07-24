@@ -127,248 +127,128 @@ class Particle:
         self.a = acceleration(self)
         self.acc_hist.append(self.a)
 
-def init_cold_pert(N: int, epsilon: float, 
-                   active_only: bool = True, v = 0) -> SortedDict:
-    """Initialize a cold plasma with perturbation
+class Plasma_Stream:
 
-    Args:
-        N (int): Number of particles in the plasma
-        epsilon (float): Magniture of perturbations
-        active_only (bool, optional): Determines wether all particles are active or not. Defaults to True.
+    stream: SortedDict(Particle)
+    weights: SortedDict
+    active_only: bool
+    d1 = float
 
-    Returns:
-        SortedDict: Sorted dictionary with particle objects as items and lagrangian coordinates as keys
-    """
-    initial_plasma = SortedDict()
-
-    for i in range(1, N+1):
-        alpha = (i - 0.5) / N if active_only else (i - 1) / N
-        x0 = alpha + epsilon * np.sin(2 * np.pi * alpha)
-        v0 = v
-
-        if not active_only:
-            is_active = i % 2 == 0
-        else:
-            is_active = True
-
-        p = Particle(alpha, x0, v0, active = is_active)
-        initial_plasma[alpha] = p
-    
-    return initial_plasma
-
-
-class Plasma_Evolver:
-
-    N: int
-    dt: float
-    epsilon: float
-    delta: float
-    ion_density: float = 1
-    plasma : SortedDict
-    t: float = 0
-    kernel: callable
-    green: callable
-    
-    def __init__(self, N_in: int, dt_in: float, epsilon_in: float = 0.05, 
-                 delta_in: float = 0.002, insertion: bool = False, 
-                 d1: float = None, d2: float = None, rk: bool = False,
-                 N_streams: int = 1, v0 = 0):
-        """Initializes an instance of PlasmaEvolver class with specified parameters
-
-        Args:
-            N_in (int): Number of starting particles in the plasma
-            dt_in (float): Timestep parameter for integration
-            epsilon_in (float, optional): Initial spatial perturbation parameter. Defaults to 0.05.
-            delta_in (float, optional): E-field regularization parameter. Defaults to 0.002.
-            insertion (bool, optional): True if adaptive particle insetion is used. Defaults to False.
-            d1 (float, optional): Distance threshold parameter for particle insertion. Defaults to None.
-            d2 (float, optional): Curvature threshold parameter for particle insertion. Defaults to None.
-            rk (bool, optional): True for RK4 integration to be used, False for Euler's method. Defaults to False.
-        """
-        self.N0 = N_in
-        self.N = N_in
-        self.dt = dt_in
-        self.epsilon = epsilon_in
-        self.delta = delta_in
-        self.weights = []
-        self.insertion = insertion
-        self.rk = rk
-        self.Ep_hist = []
-        self.Ek_hist = []
-        self.sym_hist = []
-        self.ins_hist = []
-        self.sym_profiles = []
-        self.epsilon = epsilon_in
-        self.current_t = 0
-
-        self.d1 = 2/self.N if d1 is None else d1
-
-        self.plasma = []
-
-        if N_streams == 2:
-            self.plasma.append(init_cold_pert(self.N, self.epsilon, not insertion, v=v0))
-            self.plasma.append(init_cold_pert(self.N, self.epsilon, not insertion, v=-v0))
-        elif N_streams == 3:
-            self.plasma.append(init_cold_pert(self.N, self.epsilon, not insertion, v=v0))
-            self.plasma.append(init_cold_pert(self.N, self.epsilon, not insertion, v=0))
-            self.plasma.append(init_cold_pert(self.N, self.epsilon, not insertion, v=-v0))
-        else:
-            self.plasma.append(init_cold_pert(self.N, self.epsilon, not insertion))
+    def __init__(self, N: int, epsilon: float, d1: float , active_only: bool = True, v = 0):
         
+        self.d1 = d1
+
+        self.init_cold_pert(N, epsilon=epsilon, active_only=active_only, v=v)
+        self.active_only = active_only
+
         self.calculate_weights()
 
-        # TODO :fix energy
+    def init_cold_pert(self, N: int, epsilon: float, 
+                   active_only: bool = True, v = 0) -> SortedDict:
+        """Initialize a cold plasma with perturbation
 
-        if not self.insertion:
-            self.Ep_hist.append(self.calc_Ep())
-            self.Ek_hist.append(self.calc_Ek())
-        #self.sym_hist.append(self.check_symmetry())
-        self.ins_hist.append(0)
+        Args:
+            N (int): Number of particles in the plasma
+            epsilon (float): Magniture of perturbations
+            active_only (bool, optional): Determines wether all particles are active or not. Defaults to True.
 
-    
-    def get_next(self, p: Particle, stream: SortedDict, same_type: bool = True) -> tuple:
-        """Returns the next particle in the self.plasma array. If same_type 
+        Returns:
+            SortedDict: Sorted dictionary with particle objects as items and lagrangian coordinates as keys
+        """
+        self.stream = SortedDict()
+
+        for i in range(1, N+1):
+            alpha = (i - 0.5) / N if active_only else (i - 1) / N
+            x0 = alpha + epsilon * np.sin(2 * np.pi * alpha)
+            v0 = v
+
+            if not active_only:
+                is_active = i % 2 == 0
+            else:
+                is_active = True
+
+            p = Particle(alpha, x0, v0, active = is_active)
+            self.stream[alpha] = p
+
+    def get_next(self, p: Particle, skip_one: bool = True) -> tuple:
+        """Returns the next particle in the self.plasma array. If skip_one 
         is true, then it returns the first next particle of the same type 
         (active/pasive). 
         Assumes N is even.
 
         Args:
             p (Particle): reference particle
-            same_type (bool, optional): same_type flag. Defaults to True.
+            skip_one (bool, optional): skip_one flag. Defaults to True.
 
         Returns:
-            Particle: next particle matching type if same_type is True
+            Particle: next particle matching type if skip_one is True
             wrap_around: flag to determine if next particle is on the other side of interval
         """
 
-        if self.insertion: assert(self.N % 2 == 0)
+        index = self.stream.bisect_left(p.alpha)
 
-        index = stream.bisect_left(p.alpha)
-
-        if same_type:
+        if skip_one:
             prev_index = index + 2
         else:
             prev_index = index + 1
 
-        wrap_around = True if (prev_index >= len(stream.values())) else False
+        wrap_around = True if (prev_index >= len(self.stream.values())) else False
             
-        prev_index = prev_index % len(stream.values())
+        prev_index = prev_index % len(self.stream.values())
 
-        return list(stream.values())[prev_index], wrap_around
+        return list(self.stream.values())[prev_index], wrap_around
 
-    def calc_next_dist(self, p: Particle) -> float:
+    def get_weight(self, p: Particle, same_type) -> float:
+        """Get quadrature weight of a given particle
 
-        p_next, wrap = self.get_next(p)
-        
+        Args:
+            p (Particle): reference particle
+
+        Returns:
+            float: quadrature weight value
+        """
+
+        p_next, wrap = self.get_next(p, skip_one=same_type)
+
         if not wrap:
-            p_coords = np.array([p.x, p.v])
-            p_next_coords = np.array([p_next.x, p_next.v])
-
-            dist = np.linalg.norm(p_next_coords - p_coords)
+            return p_next.alpha - p.alpha
         else:
-            p_coords = np.array([p.x, p.v])
-            p_next_coords = np.array([p_next.x + 1, p_next.v])
-
-            dist = np.linalg.norm(p_next_coords - p_coords)
-
-        return dist
-       
-
-    def get_active_weights(self):
-        active_alphas = [p.alpha for p in self.plasma.values() if p.active]
-
-        weights = np.array([self.weights[a] for a in active_alphas])
-
-        return weights
+            return p_next.alpha - p.alpha + 1
 
     def calculate_weights(self):
-        self.weights = []
+            
+        self.weights = SortedDict()
+        for p in self.stream.values(): 
+            if not self.active_only:
+                if not p.active: 
+                    self.weights[p.alpha] = self.get_weight(p, same_type=True)
+            else:
+                self.weights[p.alpha] = self.get_weight(p, same_type=False)
 
-        for stream in self.plasma:
-            w = SortedDict()
-            for p in stream.values():
-                if self.insertion:
-                    if not p.active: 
-                        w[p.alpha] = self.get_w(p, stream)
-                else:
-                    w[p.alpha] = self.get_w(p, stream)
+    def get_weights_array(self):
 
-            self.weights.append(w)
-
-    def calc_dist2chord(self, p1: Particle):
-
-        p2, wrap2 = self.get_next(p1, same_type=False) # next particle
-        p3, wrap3 = self.get_next(p1) # next particle of same type
-
-        x1, y1 = p1.x, p1.v
-        x2, y2 = p2.x, p2.v
-        x3, y3 = p3.x, p3.v
-
-        # Fix wrap around to ensure distances are right
-        if wrap2:
-            x2 += 1
-        if wrap3:
-            x3 += 1
-
-        # Calculate the slope of the line connecting p1 and p3
-        slope = (y3 - y1) / (x3 - x1)
-
-        # Calculate the y-intercept of the line connecting p1 and p3
-        intercept = y1 - slope * x1
-
-        # Calculate the perpendicular distance from p2 to the line
-        distance = abs(slope * x2 - y2 + intercept) / math.sqrt(slope ** 2 + 1)
-
-        return distance
+        return np.array(self.weights.values())
     
-    def check_symmetry(self, tol=1e-3):
-        pos = self.get_pos_array()
-        vel = self.get_vel_array()
+    def get_pos_array(self):
+
+        return np.array([p.x for p in self.stream.values()],dtype=float)
         
+    def get_vel_array(self):
 
-        if self.insertion:
-            pos = np.delete(pos, 0)
-            vel = np.delete(vel, 0)
-            pos_left = pos[0:(pos.size // 2) + 1]
-            pos_right = np.flip(pos[(pos.size // 2):] - 1)
+        return np.array([p.v for p in self.stream.values()],dtype=float)
     
-            vel_left = vel[0:(vel.size // 2) + 1]
-            vel_right = np.flip(vel[(vel.size // 2):])
-        else:
-            pos_left = pos[0:(pos.size // 2)]
-            pos_right = np.flip(pos[(pos.size // 2):] - 1)
-    
-            vel_left = vel[0:(vel.size // 2)]
-            vel_right = np.flip(vel[(vel.size // 2):])
+    def update_particles(self, new_x, new_v):
+
+        for i, p in enumerate(self.stream.values()):
+                p.update_position(new_x[i])
+                p.update_velocity(new_v[i])
 
 
-        pos_sym = pos_left + pos_right
-        vel_sym = vel_left + vel_right
-
-        profile = pos_sym + vel_sym
-
-        self.sym_profiles.append(profile)
-
-        total = (np.sum(np.abs(pos_sym)) + np.sum(np.abs(vel_sym))) / self.N
-
-        """ if total > 0.5: 
-            print(pos_sym)
-            print(vel_sym) """
-
-        return total
-
-
-        #if np.any(pos_sym > tol) or np.any(vel_sym > tol):
-            #print("Symmetry broken! t = {}".format(self.current_t))
-            #print(np.nonzero(pos_sym > tol))
-            #print(np.nonzero(vel_sym > tol))
-            #print(pos_sym)
-    
-    def insert_particles(self, stream: SortedDict()):
+    def insert_particles(self) -> bool:
         
         # Get position and velocity arrays
-        init_pos = self.get_pos_array(in_stream=stream)
-        init_vel = self.get_vel_array(in_stream=stream)
+        init_pos = self.get_pos_array()
+        init_vel = self.get_vel_array()
 
         # Add periodic image of point at x=0
         pos = np.empty(len(init_pos) + 1, dtype=init_pos.dtype)
@@ -399,22 +279,22 @@ class Plasma_Evolver:
         indices = 2 * indices
 
         # Track number of particles inserted this iteration
-        self.ins_hist.append(np.size(indices))
+        num_particles_inserted = np.size(indices)
 
         # Stop if no particles need to be inserted
         if np.size(indices) == 0:
-            return False
+            return 0
 
         # Save lagrangian coordinates for intervas that need insertion
-        keys = np.array(stream.keys())[indices[0]]    
+        keys = np.array(self.stream.keys())[indices[0]]    
 
         # Begin insertion for each interval
         for key in keys:
             # Get 3 particles in interval for insertion
-            p1 = stream[key]
+            p1 = self.stream[key]
             assert(not p1.active)
-            p2, _ = self.get_next(p1, stream=stream, same_type=False)
-            p3, wrap = self.get_next(p1, stream=stream, same_type=True)
+            p2, _ = self.get_next(p1, skip_one=False)
+            p3, wrap = self.get_next(p1, skip_one=True)
 
             #print("Insertion for particle at x:{}, v:{}, alpha:{} ".format(p1.x, p1.v, p1.alpha))
             #print("p2 at x:{}, v:{}, alpha:{} ".format(p2.x, p2.v, p2.alpha))
@@ -504,35 +384,128 @@ class Plasma_Evolver:
             p_right = Particle(a_right, x_right, v_right, periods_in=r_period, num_iter=len(p1.pos_hist))
 
             # Set middle particle to passive
-            stream[alphas[1]].active = False
+            self.stream[alphas[1]].active = False
 
             # Add particles to plasma dictionary
-            stream[a_left] = p_left
-            stream[a_right] = p_right
+            self.stream[a_left] = p_left
+            self.stream[a_right] = p_right
 
-            # Increase particle count
-            self.N += 2
+        return 2 * num_particles_inserted
 
-        return True
- 
-    def get_w(self, p: Particle, stream: SortedDict()) -> float:
-        """Get quadrature weight of a given particle
+
+class Plasma_Evolver:
+
+    N: int
+    dt: float
+    epsilon: float
+    delta: float
+    ion_density: float = 1
+    plasma : SortedDict
+    t: float = 0
+    kernel: callable
+    green: callable
+    
+    def __init__(self, N_in: int, dt_in: float, epsilon_in: float = 0.05, 
+                 delta_in: float = 0.002, insertion: bool = False, 
+                 d1: float = None, d2: float = None, rk: bool = False,
+                 N_streams: int = 1, v0 = 0):
+        """Initializes an instance of PlasmaEvolver class with specified parameters
 
         Args:
-            p (Particle): reference particle
-
-        Returns:
-            float: quadrature weight value
+            N_in (int): Number of starting particles in the plasma
+            dt_in (float): Timestep parameter for integration
+            epsilon_in (float, optional): Initial spatial perturbation parameter. Defaults to 0.05.
+            delta_in (float, optional): E-field regularization parameter. Defaults to 0.002.
+            insertion (bool, optional): True if adaptive particle insetion is used. Defaults to False.
+            d1 (float, optional): Distance threshold parameter for particle insertion. Defaults to None.
+            d2 (float, optional): Curvature threshold parameter for particle insertion. Defaults to None.
+            rk (bool, optional): True for RK4 integration to be used, False for Euler's method. Defaults to False.
         """
+        self.N0 = N_in
+        self.N = N_in
+        self.dt = dt_in
+        self.epsilon = epsilon_in
+        self.delta = delta_in
+        self.insertion = insertion
+        self.rk = rk
+        self.Ep_hist = []
+        self.Ek_hist = []
+        self.sym_hist = []
+        self.ins_hist = []
+        self.sym_profiles = []
+        self.epsilon = epsilon_in
+        self.current_t = 0
 
-        p_next, wrap = self.get_next(p, stream, same_type=self.insertion)
+        self.d1 = 2/self.N if d1 is None else d1
 
-        if not wrap:
-            return p_next.alpha - p.alpha
+        self.plasma = []
+
+        if N_streams == 2:
+            self.plasma.append(Plasma_Stream(self.N, self.epsilon, self.d1, not insertion, v=v0))
+            self.plasma.append(Plasma_Stream(self.N, self.epsilon, self.d1, not insertion, v=-v0))
         else:
-            return p_next.alpha - p.alpha + 1
+            self.plasma.append(Plasma_Stream(self.N, self.epsilon, self.d1, not insertion))
+
+
+        if not self.insertion:
+            self.Ep_hist.append(self.calc_Ep())
+            self.Ek_hist.append(self.calc_Ek())
+        #self.sym_hist.append(self.check_symmetry())
+        self.ins_hist.append(0)
+        if self.insertion: assert(self.N % 2 == 0)
+
+
+    def calculate_weights(self):
+
+        for stream in self.plasma:
+            
+            stream.calculate_weights()
+    
+    def check_symmetry(self, tol=1e-3):
+        pos = self.get_pos_array()
+        vel = self.get_vel_array()
         
-    def get_pos_array(self, active_only = False, in_stream = None) -> np.array:
+
+        if self.insertion:
+            pos = np.delete(pos, 0)
+            vel = np.delete(vel, 0)
+            pos_left = pos[0:(pos.size // 2) + 1]
+            pos_right = np.flip(pos[(pos.size // 2):] - 1)
+    
+            vel_left = vel[0:(vel.size // 2) + 1]
+            vel_right = np.flip(vel[(vel.size // 2):])
+        else:
+            pos_left = pos[0:(pos.size // 2)]
+            pos_right = np.flip(pos[(pos.size // 2):] - 1)
+    
+            vel_left = vel[0:(vel.size // 2)]
+            vel_right = np.flip(vel[(vel.size // 2):])
+
+
+        pos_sym = pos_left + pos_right
+        vel_sym = vel_left + vel_right
+
+        profile = pos_sym + vel_sym
+
+        self.sym_profiles.append(profile)
+
+        total = (np.sum(np.abs(pos_sym)) + np.sum(np.abs(vel_sym))) / self.N
+
+        """ if total > 0.5: 
+            print(pos_sym)
+            print(vel_sym) """
+
+        return total
+
+
+        #if np.any(pos_sym > tol) or np.any(vel_sym > tol):
+            #print("Symmetry broken! t = {}".format(self.current_t))
+            #print(np.nonzero(pos_sym > tol))
+            #print(np.nonzero(vel_sym > tol))
+            #print(pos_sym)
+    
+        
+    def get_pos_array(self) -> np.array:
         """Extract all particle positions from plasma dictionary
 
         Args:
@@ -541,42 +514,34 @@ class Plasma_Evolver:
         Returns:
             [np.array]: Array of particle positions in ascending order with respect to lagrangian coordinates
         """
-        if in_stream is None:
-            pos_array = []
-            for stream in self.plasma:
-                if active_only:
-                    pos_array.append(np.array([p.x for p in stream.values() if p.active],
-                                    dtype=float))
 
-                else:
-                    pos_array.append(np.array([p.x for p in stream.values()],
-                                    dtype=float))
-            return np.array(pos_array)
-        else:
-            if active_only:
-                return np.array([p.x for p in in_stream.values() if p.active], dtype=float)
+        pos_array = []
 
-            else:
-                return np.array([p.x for p in in_stream.values()],dtype=float)
+        for stream in self.plasma:
+            pos_array.append(stream.get_pos_array())
 
+        return np.array(pos_array)
     
-    def get_vel_array(self, in_stream = None)-> np.array:
+    def get_vel_array(self)-> np.array:
 
-        if in_stream is None:
-            vel_array = []
+        vel_array = []
 
-            for stream in self.plasma:
-                vel_array.append(np.array([p.v for p in stream.values()],dtype=float))
+        for stream in self.plasma:
+            vel_array.append(np.array(stream.get_vel_array()))
 
-            return np.array(vel_array)
-        else:
-            return np.array([p.v for p in in_stream.values()],dtype=float)
+        return np.array(vel_array)
+    
+    def get_weights_array(self):
+
+        weights = []
+
+        for stream in self.plasma:
+            weights.append(stream.get_weights_array())
+        return np.array(weights).flatten()         
 
     def update_particles(self, new_x: np.array, new_v: np.array) -> None:
-        for s, stream in enumerate(self.plasma):
-            for i, p in enumerate(stream.values()):
-                p.update_position(new_x[s,i])
-                p.update_velocity(new_v[s,i])
+        for i, stream in enumerate(self.plasma):
+            stream.update_particles(new_x[i], new_v[i])
 
     def calc_Ek(self):
 
@@ -589,16 +554,13 @@ class Plasma_Evolver:
 
         # Get positions
         pos = self.get_pos_array().flatten()
-        weights = np.array([np.array(w.values()) for w in self.weights]).flatten()
+        weights = self.get_weights_array()
         # Calculate absoolute value of differences between all positions
         abs_diff_matrix = - self.gd(pos[:, np.newaxis], pos[np.newaxis, :])
         square_diff_matrix = 0.5 * np.power(pos[:, np.newaxis] 
                                             - pos[np.newaxis, :], 2)
         potential = (abs_diff_matrix - square_diff_matrix) * weights
         total_potential = np.sum(np.triu(potential, k=1))
-
-        
-
 
         return total_potential
 
@@ -636,7 +598,7 @@ class Plasma_Evolver:
         if num_samples is None:
             num_samples = self.N
         
-        weights = np.array(self.weights.values(), dtype=float)
+        weights = self.get_weights_array()
         particles = self.get_pos_array()
         x_arr = np.linspace(0, 1, num_samples, endpoint=False) - (1/(2*num_samples))
 
@@ -650,44 +612,6 @@ class Plasma_Evolver:
         k_contribution = np.sum(weighted_k_map, axis=1)
 
         return -k_contribution, x_arr
-    
-    def calc_acceleration_reg(self, x_arr: np.array, v_arr: np.array) -> float:
-
-        """
-        Calculates the acceleration on a given particle due to rest of the stream
-        with regularization
-
-        Returns:
-            float: acceleration
-        """
-
-        weights = np.array([np.array(w.values()) for w in self.weights]).flatten()
-
-        # Broadcast positions to get a 2D array of values of Green's Function kd
-        # over all particles. i,j entry corresponds to the values of kd(xi, xj) 
-        # for i,j = 1:N
-        if self.insertion:
-            k_map = np.array([self.kd(x_arr[:, np.newaxis], x_arr[1::2])])[0]
-        else:
-            k_map = np.array([self.kd(x_arr[:, np.newaxis], x_arr)])[0]
-        # Multiply each row by the corresponding weights
-        weighted_k_map = k_map * weights
-        # Add up each row to get electric field force felt by each particle
-        k_contribution = np.sum(weighted_k_map, axis=1)
-
-        """ print("K map")
-        print(k_map)
-        print("\nweighted k map")
-        print(weighted_k_map)
-        print("\n Acceleration") """
-
-
-
-        first = - k_contribution
-
-        acc = first
- 
-        return acc
     
     def euler_update(self, fx: callable, fv: callable , x0: np.array, v0: np.array) -> tuple:
 
@@ -724,6 +648,45 @@ class Plasma_Evolver:
         new_v = v0 + (1/6) * self.dt * (k1v + 2 * k2v + 2 * k3v + k4v)
 
         return new_x.reshape(shape), new_v.reshape(shape)
+
+    def calc_acceleration_reg(self, x_arr: np.array, v_arr: np.array) -> float:
+
+        """
+        Calculates the acceleration on a given particle due to rest of the stream
+        with regularization
+
+        Returns:
+            float: acceleration
+        """
+
+        weights = self.get_weights_array()
+
+        # Broadcast positions to get a 2D array of values of Green's Function kd
+        # over all particles. i,j entry corresponds to the values of kd(xi, xj) 
+        # for i,j = 1:N
+        if self.insertion:
+            k_map = np.array([self.kd(x_arr[:, np.newaxis], x_arr[1::2])])[0]
+        else:
+            k_map = np.array([self.kd(x_arr[:, np.newaxis], x_arr)])[0]
+        # Multiply each row by the corresponding weights
+        weighted_k_map = k_map * weights
+        # Add up each row to get electric field force felt by each particle
+        k_contribution = np.sum(weighted_k_map, axis=1)
+
+        """ print("K map")
+        print(k_map)
+        print("\nweighted k map")
+        print(weighted_k_map)
+        print("\n Acceleration") """
+
+
+
+        first = - k_contribution
+
+        acc = first
+ 
+        return acc
+    
     
     def evolve_plasma(self, time: float):
         """
@@ -753,17 +716,16 @@ class Plasma_Evolver:
                 self.Ep_hist.append(self.calc_Ep())
                 self.Ek_hist.append(self.calc_Ek())
 
-            if self.insertion: 
-                ct = 0
+            if self.insertion:
+                num_new_particles = 0
                 for stream in self.plasma:
-                    #print("Starting Insertion for Stream {}".format(ct))
-                    if self.insert_particles(stream=stream):
-                        self.calculate_weights()
-                    ct += 1
+                    ins_particles = stream.insert_particles()
+                    if ins_particles != 0:
+                        stream.calculate_weights()
+                    num_new_particles += ins_particles
+                self.ins_hist.append(num_new_particles)
+                self.N += num_new_particles
 
-
-            for stream in self.plasma:
-                assert(np.all(np.array([p.active for p in stream.values()])[1::2] == 1))
             
                 
     def plot_particles(self,times: tuple = (-1,), periods: int = 1, zoom: bool = False, markers_on = True, 
@@ -829,12 +791,12 @@ class Plasma_Evolver:
             
             index = int(t / self.dt)
             
-            for stream in self.plasma:
+            for plasma_stream in self.plasma:
 
                 # Extract positions and velocities of particles
-                positions = np.array([(p.pos_hist[index] + p.period_hist[index]) for p in stream.values() if p.pos_hist[index] is not None])
+                positions = np.array([(p.pos_hist[index] + p.period_hist[index]) for p in plasma_stream.stream.values() if p.pos_hist[index] is not None])
                 
-                velocities = np.array([p.vel_hist[index] for p in stream.values() if p.vel_hist[index] is not None])
+                velocities = np.array([p.vel_hist[index] for p in plasma_stream.stream.values() if p.vel_hist[index] is not None])
 
                 #positions = np.concatenate((np.array([positions[-1] - 1]), positions, np.array([positions[0] + 1])))
                 #velocities = np.concatenate((np.array([velocities[-1]]), velocities, np.array([velocities[0]])))
