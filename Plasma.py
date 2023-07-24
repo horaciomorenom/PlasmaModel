@@ -89,8 +89,8 @@ class Particle:
         Returns:
             None
         """
-        if self.alpha != 0:
-            self.x = new_x
+ 
+        self.x = new_x
         if self.x >= 1: self.periods += 1
         if self.x < 0: self.periods -= 1
         self.x = self.x % 1
@@ -110,8 +110,7 @@ class Particle:
         Returns:
             None
         """
-        if self.alpha != 0:
-            self.v = new_v
+        self.v = new_v
         self.vel_hist.append(self.v)
 
     def update_acceleration(self, acceleration):
@@ -209,19 +208,14 @@ class Plasma_Evolver:
         if N_streams == 2:
             self.plasma.append(init_cold_pert(self.N, self.epsilon, not insertion, v=v0))
             self.plasma.append(init_cold_pert(self.N, self.epsilon, not insertion, v=-v0))
+        elif N_streams == 3:
+            self.plasma.append(init_cold_pert(self.N, self.epsilon, not insertion, v=v0))
+            self.plasma.append(init_cold_pert(self.N, self.epsilon, not insertion, v=0))
+            self.plasma.append(init_cold_pert(self.N, self.epsilon, not insertion, v=-v0))
         else:
             self.plasma.append(init_cold_pert(self.N, self.epsilon, not insertion))
         
-        for stream in self.plasma:
-            w = SortedDict()
-            for p in stream.values():
-                if self.insertion:
-                    if not p.active: 
-                        w[p.alpha] = self.get_w(p, stream)
-                else:
-                    w[p.alpha] = self.get_w(p, stream)
-
-            self.weights.append(w)
+        self.calculate_weights()
 
         # TODO :fix energy
 
@@ -286,6 +280,20 @@ class Plasma_Evolver:
         weights = np.array([self.weights[a] for a in active_alphas])
 
         return weights
+
+    def calculate_weights(self):
+        self.weights = []
+
+        for stream in self.plasma:
+            w = SortedDict()
+            for p in stream.values():
+                if self.insertion:
+                    if not p.active: 
+                        w[p.alpha] = self.get_w(p, stream)
+                else:
+                    w[p.alpha] = self.get_w(p, stream)
+
+            self.weights.append(w)
 
     def calc_dist2chord(self, p1: Particle):
 
@@ -356,11 +364,11 @@ class Plasma_Evolver:
             #print(np.nonzero(vel_sym > tol))
             #print(pos_sym)
     
-    def insert_particles(self):
+    def insert_particles(self, stream: SortedDict()):
         
         # Get position and velocity arrays
-        init_pos = self.get_pos_array()
-        init_vel = self.get_vel_array()
+        init_pos = self.get_pos_array(in_stream=stream)
+        init_vel = self.get_vel_array(in_stream=stream)
 
         # Add periodic image of point at x=0
         pos = np.empty(len(init_pos) + 1, dtype=init_pos.dtype)
@@ -395,18 +403,22 @@ class Plasma_Evolver:
 
         # Stop if no particles need to be inserted
         if np.size(indices) == 0:
-            return
+            return False
 
         # Save lagrangian coordinates for intervas that need insertion
-        keys = np.array(self.plasma.keys())[indices[0]]    
+        keys = np.array(stream.keys())[indices[0]]    
 
         # Begin insertion for each interval
         for key in keys:
             # Get 3 particles in interval for insertion
-            p1 = self.plasma[key]
+            p1 = stream[key]
             assert(not p1.active)
-            p2, _ = self.get_next(p1, same_type=False)
-            p3, wrap = self.get_next(p1, same_type=True)
+            p2, _ = self.get_next(p1, stream=stream, same_type=False)
+            p3, wrap = self.get_next(p1, stream=stream, same_type=True)
+
+            #print("Insertion for particle at x:{}, v:{}, alpha:{} ".format(p1.x, p1.v, p1.alpha))
+            #print("p2 at x:{}, v:{}, alpha:{} ".format(p2.x, p2.v, p2.alpha))
+            #print("p3 at x:{}, v:{}, alpha:{} ".format(p3.x, p3.v, p3.alpha))
 
             # Get lagrangian coordinates
             alphas = np.array([p1.alpha, p2.alpha, p3.alpha])
@@ -492,20 +504,16 @@ class Plasma_Evolver:
             p_right = Particle(a_right, x_right, v_right, periods_in=r_period, num_iter=len(p1.pos_hist))
 
             # Set middle particle to passive
-            self.plasma[alphas[1]].active = False
+            stream[alphas[1]].active = False
 
             # Add particles to plasma dictionary
-            self.plasma[a_left] = p_left
-            self.plasma[a_right] = p_right
+            stream[a_left] = p_left
+            stream[a_right] = p_right
 
             # Increase particle count
             self.N += 2
 
-        # Recalculate quadrature weigths
-        self.weights.clear()
-
-        for p in self.plasma.values():
-            if not p.active: self.weights[p.alpha] = self.get_w(p)
+        return True
  
     def get_w(self, p: Particle, stream: SortedDict()) -> float:
         """Get quadrature weight of a given particle
@@ -524,7 +532,7 @@ class Plasma_Evolver:
         else:
             return p_next.alpha - p.alpha + 1
         
-    def get_pos_array(self, active_only = False) -> np.array:
+    def get_pos_array(self, active_only = False, in_stream = None) -> np.array:
         """Extract all particle positions from plasma dictionary
 
         Args:
@@ -533,26 +541,36 @@ class Plasma_Evolver:
         Returns:
             [np.array]: Array of particle positions in ascending order with respect to lagrangian coordinates
         """
-        pos_array = []
-        for stream in self.plasma:
+        if in_stream is None:
+            pos_array = []
+            for stream in self.plasma:
+                if active_only:
+                    pos_array.append(np.array([p.x for p in stream.values() if p.active],
+                                    dtype=float))
+
+                else:
+                    pos_array.append(np.array([p.x for p in stream.values()],
+                                    dtype=float))
+            return np.array(pos_array)
+        else:
             if active_only:
-                pos_array.append(np.array([p.x for p in stream.values() if p.active],
-                                dtype=float))
+                return np.array([p.x for p in in_stream.values() if p.active], dtype=float)
 
             else:
-                pos_array.append(np.array([p.x for p in stream.values() if p.active],
-                                dtype=float))
-        return np.array(pos_array)
+                return np.array([p.x for p in in_stream.values()],dtype=float)
+
     
-    def get_vel_array(self)-> np.array:
+    def get_vel_array(self, in_stream = None)-> np.array:
 
-        vel_array = []
+        if in_stream is None:
+            vel_array = []
 
-        for stream in self.plasma:
+            for stream in self.plasma:
+                vel_array.append(np.array([p.v for p in stream.values()],dtype=float))
 
-            vel_array.append(np.array([p.v for p in stream.values()],dtype=float))
-
-        return np.array(vel_array)
+            return np.array(vel_array)
+        else:
+            return np.array([p.v for p in in_stream.values()],dtype=float)
 
     def update_particles(self, new_x: np.array, new_v: np.array) -> None:
         for s, stream in enumerate(self.plasma):
@@ -736,7 +754,14 @@ class Plasma_Evolver:
                 self.Ep_hist.append(self.calc_Ep())
                 self.Ek_hist.append(self.calc_Ek()) """
 
-            if self.insertion: self.insert_particles()
+            if self.insertion: 
+                ct = 0
+                for stream in self.plasma:
+                    #print("Starting Insertion for Stream {}".format(ct))
+                    if self.insert_particles(stream=stream):
+                        self.calculate_weights()
+                    ct += 1
+
 
             for stream in self.plasma:
                 assert(np.all(np.array([p.active for p in stream.values()])[1::2] == 1))
@@ -826,7 +851,7 @@ class Plasma_Evolver:
 
                 if zoom or midzoom: 
                     if zoom: axs[num].hlines(y=0, xmin=0, xmax=periods, linewidth = 0.5, color = 'r', linestyle = '--')
-                    visperiods = range(-3, periods + 3) if midzoom else range(-1, periods + 1)
+                    visperiods = range(-2, periods + 2) if midzoom else range(-1, periods + 1)
                     for j in visperiods:
                         if markers_on:
                             axs[num].plot(positions + j, velocities, marker='.', markersize=3,  alpha=1, linewidth=0.7)
@@ -844,7 +869,7 @@ class Plasma_Evolver:
                 else:
 
                     # Add lines connecting neighboring particles on the sorted dictionary
-                    for j in range(-3, periods + 3):
+                    for j in range(-2, periods + 2):
                         if markers_on and not lines_off:
                             axs[num].plot(positions + j, velocities, marker='.', markersize=2.5,  alpha=1, linewidth=0.7)
                         elif lines_off: 
