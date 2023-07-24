@@ -219,9 +219,9 @@ class Plasma_Evolver:
 
         # TODO :fix energy
 
-        """ if not self.insertion:
+        if not self.insertion:
             self.Ep_hist.append(self.calc_Ep())
-            self.Ek_hist.append(self.calc_Ek()) """
+            self.Ek_hist.append(self.calc_Ek())
         #self.sym_hist.append(self.check_symmetry())
         self.ins_hist.append(0)
 
@@ -581,7 +581,6 @@ class Plasma_Evolver:
     def calc_Ek(self):
 
         vel = self.get_vel_array().flatten()
-        w = np.array(self.weights.values(), dtype=float)
         Ek = 0.5 * np.sum(np.power(vel, 2))
         return Ek
 
@@ -589,13 +588,13 @@ class Plasma_Evolver:
     def calc_Ep(self):
 
         # Get positions
-        pos = self.get_pos_array()
-        w = self.weights.values()
+        pos = self.get_pos_array().flatten()
+        weights = np.array([np.array(w.values()) for w in self.weights]).flatten()
         # Calculate absoolute value of differences between all positions
         abs_diff_matrix = - self.gd(pos[:, np.newaxis], pos[np.newaxis, :])
         square_diff_matrix = 0.5 * np.power(pos[:, np.newaxis] 
                                             - pos[np.newaxis, :], 2)
-        potential = (abs_diff_matrix - square_diff_matrix) * w
+        potential = (abs_diff_matrix - square_diff_matrix) * weights
         total_potential = np.sum(np.triu(potential, k=1))
 
         
@@ -750,9 +749,9 @@ class Plasma_Evolver:
 
             self.update_particles(new_x, new_v)
             
-            """ if not self.insertion:
+            if not self.insertion:
                 self.Ep_hist.append(self.calc_Ep())
-                self.Ek_hist.append(self.calc_Ek()) """
+                self.Ek_hist.append(self.calc_Ek())
 
             if self.insertion: 
                 ct = 0
