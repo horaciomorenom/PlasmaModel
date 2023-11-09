@@ -12,14 +12,25 @@ class Particle:
 
     Attributes:
     -----------
-    id : int
-        Label to preserve order of particles
     alpha : float
         The Lagrangian coordinate of the particle, ranging from 1:N
     x : float
         The position of the particle in the domain [0,1).
     v : float
         The velocity of the particle.
+    a : float
+        The acceleration of the particle.
+    active : bool
+        Boolean determining whether the particle is passive or active
+    pos_hist : list
+        List of previous positions for the particle
+    vel_hist : list
+        List of previous velocities for the particle
+    periods : int
+        Number of periods travelled by the particle (positive: to the right, 
+        negative: left)
+    period_hist : list
+        List of previous periods travelled
     """
     alpha: float
     x: float
@@ -31,7 +42,7 @@ class Particle:
     periods : int
     period_hist: list 
 
-    def __init__(self, alpha_in: float, x0: float, v0: float, 
+    def __init__(self, alpha_in: float, x0: float, v0: float, charge: float, 
                  active: bool = True, periods_in: int = 0, num_iter: int = None):              
         """Initialzie a particle in plasma
 
@@ -50,19 +61,23 @@ class Particle:
         self.a = 0
         self.active = active
         self.periods = periods_in
+        self.charge = charge
 
         if num_iter is None:
             self.pos_hist = []
             self.vel_hist = []
             self.period_hist = []
+            self.charge_hist = []
         else:
             self.pos_hist = [None] * (num_iter - 1)
             self.vel_hist = [None] * (num_iter - 1)
             self.period_hist = [None] * (num_iter - 1)
+            self.charge_hist = [None] * (num_iter - 1)
         
         self.pos_hist.append(self.x)
         self.vel_hist.append(self.v)
         self.period_hist.append(self.periods)
+        self.charge_hist.append(self.charge)
         
 
     def __lt__(self, other):
@@ -96,6 +111,7 @@ class Particle:
         self.x = self.x % 1
         self.pos_hist.append(self.x)
         self.period_hist.append(self.periods)
+        self.charge_hist.append(self.charge)
 
 
     def update_velocity(self, new_v):
@@ -137,6 +153,9 @@ class Plasma_Stream:
     def __init__(self, N: int, epsilon: float, d1: float , active_only: bool = True, v = 0):
         
         self.d1 = d1
+        self.N0 = N
+        self.N = N
+        self.ins_hist = [0]
 
         self.init_cold_pert(N, epsilon=epsilon, active_only=active_only, v=v)
         self.active_only = active_only
@@ -167,7 +186,17 @@ class Plasma_Stream:
             else:
                 is_active = True
 
-            p = Particle(alpha, x0, v0, active = is_active)
+            if active_only:
+                charge = 1/N
+            else:
+                if is_active:
+                    charge = 2/N
+                else:
+                    charge = 0
+
+        
+
+            p = Particle(alpha, x0, v0, charge, active = is_active)
             self.stream[alpha] = p
 
     def get_next(self, p: Particle, skip_one: bool = True) -> tuple:
@@ -279,7 +308,7 @@ class Plasma_Stream:
         indices = 2 * indices
 
         # Track number of particles inserted this iteration
-        num_particles_inserted = np.size(indices)
+        num_particles_inserted = 2 * np.size(indices)
 
         # Stop if no particles need to be inserted
         if np.size(indices) == 0:
@@ -379,18 +408,25 @@ class Plasma_Stream:
             x_left = x_left % 1
             x_right = x_right % 1 
 
+            net_charge = self.stream[alphas[1]].charge
+
             # Create new particle objects with specified values
-            p_left = Particle(a_left, x_left, v_left, periods_in=l_period, num_iter=len(p1.pos_hist))
-            p_right = Particle(a_right, x_right, v_right, periods_in=r_period, num_iter=len(p1.pos_hist))
+            p_left = Particle(a_left, x_left, v_left, net_charge / 2, periods_in=l_period, num_iter=len(p1.pos_hist))
+            p_right = Particle(a_right, x_right, v_right, net_charge / 2, periods_in=r_period, num_iter=len(p1.pos_hist))
 
             # Set middle particle to passive
             self.stream[alphas[1]].active = False
+            self.stream[alphas[1]].charge = 0
 
             # Add particles to plasma dictionary
             self.stream[a_left] = p_left
             self.stream[a_right] = p_right
+        
+        self.ins_hist.append(num_particles_inserted)
 
-        return 2 * num_particles_inserted
+        self.N += num_particles_inserted
+
+        return num_particles_inserted
 
 
 class Plasma_Evolver:
@@ -679,13 +715,7 @@ class Plasma_Evolver:
         print(weighted_k_map)
         print("\n Acceleration") """
 
-
-
-        first = - k_contribution
-
-        acc = first
- 
-        return acc
+        return - k_contribution
     
     
     def evolve_plasma(self, time: float):
@@ -782,6 +812,7 @@ class Plasma_Evolver:
         #fig.text(0.5, 0.01, 'Position', ha='center')
         #fig.text(0.04, 0.5, 'Velocity', va='center', rotation='vertical')
         
+        colors = ('b', 'r')
 
 
         for num, t in enumerate(times):
@@ -791,7 +822,7 @@ class Plasma_Evolver:
             
             index = int(t / self.dt)
             
-            for plasma_stream in self.plasma:
+            for plasma_stream, color in zip(self.plasma, colors):
 
                 # Extract positions and velocities of particles
                 positions = np.array([(p.pos_hist[index] + p.period_hist[index]) for p in plasma_stream.stream.values() if p.pos_hist[index] is not None])
@@ -806,7 +837,7 @@ class Plasma_Evolver:
 
                 # Plot particles as points in phase space
                 axs[num].set_xlim((0,periods))
-                axs[num].set_ylim((-0.7,0.7))
+                axs[num].set_ylim((-0.3,0.3))
                 if t == times[-1]: axs[num].set_xlabel("Position")
                 axs[num].set_ylabel("Velocity")
 
@@ -815,9 +846,10 @@ class Plasma_Evolver:
                     visperiods = range(-2, periods + 2) if midzoom else range(-1, periods + 1)
                     for j in visperiods:
                         if markers_on:
-                            axs[num].plot(positions + j, velocities, marker='.', markersize=3,  alpha=1, linewidth=0.7)
+                            axs[num].plot(positions + j, velocities, marker='.', markersize=3, c=color,
+                                           alpha=1, linewidth=0.7)
                         else:
-                            axs[num].plot(positions + j, velocities, alpha=1, linewidth=0.7)
+                            axs[num].plot(positions + j, velocities, alpha=1, c=color, linewidth=0.7)
                     axs[num].set_title("t = " + str(t))
                     if zoom:
                         axs[num].set_xlim((0.45, 0.55))
@@ -830,11 +862,11 @@ class Plasma_Evolver:
                 else:
 
                     # Add lines connecting neighboring particles on the sorted dictionary
-                    for j in range(-2, periods + 2):
+                    for j in range(-3, periods + 3):
                         if markers_on and not lines_off:
-                            axs[num].plot(positions + j, velocities, marker='.', markersize=2.5,  alpha=1, linewidth=0.7)
+                            axs[num].plot(positions + j, velocities, marker='.', markersize=2.5, alpha=1, linewidth=0.7)
                         elif lines_off: 
-                            axs[num].scatter(positions + j, velocities, marker='.', s=1,  alpha=1)
+                            axs[num].scatter(positions + j, velocities, marker='.', s=2, alpha=1)
                         else:
                             axs[num].plot(positions + j, velocities, alpha=1, linewidth=0.7)
                         axs[num].set_title("t = " + str(t))
